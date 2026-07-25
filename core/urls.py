@@ -33,7 +33,10 @@ schema_view = get_schema_view(
    permission_classes=(permissions.AllowAny,),
 )
 
+from django.views.generic import RedirectView
+
 urlpatterns = [
+    path('', RedirectView.as_view(url='/api/v1/', permanent=False)),
     path('admin/', admin.site.urls),
     path("api/v1/", include([
         path('auth/', include('accounts.urls')),
