@@ -1,5 +1,4 @@
-from rest_framework import viewsets, permissions, status, generics
-from rest_framework.decorators import action
+from rest_framework import permissions, status, generics
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from .models import Listing, ListingImage
@@ -20,8 +19,14 @@ class IsAgentOwnerOrReadOnly(permissions.BasePermission):
         return obj.agent == request.user
 
 
-class ListingViewSet(viewsets.ModelViewSet):
+class ListingListCreateView(generics.ListCreateAPIView):
     queryset = Listing.objects.all().order_by('-created_at')
+    serializer_class = ListingSerializer
+    permission_classes = [IsAgentOwnerOrReadOnly]
+
+
+class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Listing.objects.all()
     serializer_class = ListingSerializer
     permission_classes = [IsAgentOwnerOrReadOnly]
 
@@ -30,8 +35,17 @@ class ListingViewSet(viewsets.ModelViewSet):
         kwargs['partial'] = True
         return super().update(request, *args, **kwargs)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def boost(self, request, pk=None):
+
+class ListingBoostView(generics.GenericAPIView):
+    queryset = Listing.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingSerializer
+
+    @swagger_auto_schema(
+        operation_description="Toggle boost status on a property listing.",
+        responses={200: "Listing boosted / unboosted successfully."}
+    )
+    def post(self, request, pk, *args, **kwargs):
         listing = self.get_object()
         
         # Verify ownership
@@ -70,8 +84,17 @@ class ListingViewSet(viewsets.ModelViewSet):
             "is_boosted": listing.is_boosted
         }, status=status.HTTP_200_OK)
 
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
-    def feature(self, request, pk=None):
+
+class ListingFeatureView(generics.GenericAPIView):
+    queryset = Listing.objects.all()
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingSerializer
+
+    @swagger_auto_schema(
+        operation_description="Toggle feature status on a property listing.",
+        responses={200: "Listing featured / unfeatured successfully."}
+    )
+    def post(self, request, pk, *args, **kwargs):
         listing = self.get_object()
         
         # Verify ownership
@@ -110,15 +133,18 @@ class ListingViewSet(viewsets.ModelViewSet):
             "is_featured": listing.is_featured
         }, status=status.HTTP_200_OK)
 
+
+class ListingUploadPhotosView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingImageUploadSerializer
+
     @swagger_auto_schema(
-        method='post',
         operation_description="Upload property photos (Step 2 flow). Auto-converts photos to WebP format.",
         request_body=ListingImageUploadSerializer,
         responses={201: "Photos uploaded successfully."}
     )
-    @action(detail=False, methods=['post'], url_path='upload-photos', permission_classes=[permissions.IsAuthenticated])
-    def upload_photos(self, request):
-        serializer = ListingImageUploadSerializer(data=request.data)
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         images = serializer.validated_data.get('images', [])
@@ -150,13 +176,17 @@ class ListingViewSet(viewsets.ModelViewSet):
             "images": output_serializer.data
         }, status=status.HTTP_201_CREATED)
 
+
+class ListingDeletePhotoView(generics.DestroyAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    queryset = ListingImage.objects.all()
+    serializer_class = ListingImageSerializer
+
     @swagger_auto_schema(
-        method='delete',
         operation_description="Delete a property photo by image ID (matches the delete 'x' button on photo cards).",
         responses={200: "Photo deleted successfully."}
     )
-    @action(detail=False, methods=['delete'], url_path=r'images/(?P<image_id>[^/.]+)', permission_classes=[permissions.IsAuthenticated])
-    def delete_photo(self, request, image_id=None):
+    def delete(self, request, image_id, *args, **kwargs):
         try:
             image_obj = ListingImage.objects.get(pk=image_id)
         except ListingImage.DoesNotExist:
@@ -166,4 +196,4 @@ class ListingViewSet(viewsets.ModelViewSet):
             return Response({"error": "You do not have permission to delete this photo."}, status=status.HTTP_403_FORBIDDEN)
 
         image_obj.delete()
-        return Response({"message": "Photo deleted successfully.", "id": image_id}, status=status.HTTP_200_OK)
+        return Response({"message": "Photo deleted successfully.", "id": str(image_id)}, status=status.HTTP_200_OK)
