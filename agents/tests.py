@@ -243,3 +243,52 @@ class ListingAPITests(APITestCase):
         response2 = self.client.post(feature_url2)
         self.assertEqual(response2.status_code, status.HTTP_403_FORBIDDEN)
         self.assertIn("reached your plan limit", response2.data['error'])
+
+    def test_upload_and_delete_listing_photos(self):
+        import io
+        from PIL import Image
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Step 2 Upload: Agent uploads 2 property photos before creating the listing record
+        img_io1 = io.BytesIO()
+        Image.new('RGB', (800, 600), color='red').save(img_io1, format='JPEG')
+        img_file1 = SimpleUploadedFile("house1.jpg", img_io1.getvalue(), content_type="image/jpeg")
+
+        img_io2 = io.BytesIO()
+        Image.new('RGB', (800, 600), color='blue').save(img_io2, format='JPEG')
+        img_file2 = SimpleUploadedFile("house2.jpg", img_io2.getvalue(), content_type="image/jpeg")
+
+        upload_url = reverse('listing-upload-photos')
+        upload_res = self.client.post(upload_url, {'images': [img_file1, img_file2]}, format='multipart')
+        self.assertEqual(upload_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(upload_res.data['images']), 2)
+
+        uploaded_img_ids = [img['id'] for img in upload_res.data['images']]
+
+        # 2. Step 3: Agent creates the listing and links the pre-uploaded image IDs
+        create_data = {
+            "title": "Luxury Mansion",
+            "category": "villa",
+            "price": "25000000.00",
+            "address": "Victoria Island, Lagos",
+            "latitude": "6.428100",
+            "longitude": "3.421900",
+            "image_ids": uploaded_img_ids
+        }
+        create_res = self.client.post(self.list_url, create_data, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(create_res.data['images']), 2)
+
+        # 3. Test deleting a photo by image_id (matches the 'x' remove button on cards)
+        delete_photo_id = uploaded_img_ids[1]
+        delete_url = reverse('listing-delete-photo', kwargs={'image_id': delete_photo_id})
+        delete_res = self.client.delete(delete_url)
+        self.assertEqual(delete_res.status_code, status.HTTP_200_OK)
+
+        # Verify photo count reduced to 1
+        listing_obj = Listing.objects.get(pk=create_res.data['id'])
+        self.assertEqual(listing_obj.images.count(), 1)
+

@@ -8,15 +8,37 @@ User = get_user_model()
 class ListingImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ListingImage
-        fields = ('id', 'image', 'is_cover')
+        fields = ('id', 'image', 'is_cover', 'created_at')
+
+
+class ListingImageUploadSerializer(serializers.Serializer):
+    images = serializers.ListField(
+        child=serializers.ImageField(max_length=10000000, allow_empty_file=False),
+        required=False,
+        help_text="List of property image files to upload."
+    )
+    image = serializers.ImageField(required=False, help_text="Single property image file to upload.")
+    listing_id = serializers.UUIDField(required=False, allow_null=True, help_text="Optional ID of listing to attach images to.")
+
+    def validate(self, attrs):
+        if not attrs.get('images') and not attrs.get('image'):
+            raise serializers.ValidationError("At least one image file must be provided under 'images' or 'image'.")
+        return attrs
 
 
 class ListingSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
+    image_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        write_only=True,
+        required=False,
+        help_text="List of pre-uploaded image UUIDs to attach to this listing."
+    )
     uploaded_images = serializers.ListField(
         child=serializers.ImageField(max_length=10000000, allow_empty_file=False, use_url=False),
         write_only=True,
-        required=False
+        required=False,
+        help_text="Direct multipart image files to upload."
     )
     agent_name = serializers.CharField(source='agent.full_name', read_only=True)
 
@@ -26,7 +48,7 @@ class ListingSerializer(serializers.ModelSerializer):
             'id', 'agent', 'agent_name', 'title', 'category', 'price', 'address',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'is_published', 'is_boosted',
-            'is_featured', 'images', 'uploaded_images', 'created_at', 'updated_at'
+            'is_featured', 'images', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
 
@@ -57,17 +79,33 @@ class ListingSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        image_ids = validated_data.pop('image_ids', [])
         uploaded_images = validated_data.pop('uploaded_images', [])
         # Assign current request user as agent
         validated_data['agent'] = self.context['request'].user
         listing = Listing.objects.create(**validated_data)
 
-        # Store images
-        for idx, img in enumerate(uploaded_images):
-            ListingImage.objects.create(
-                listing=listing,
-                image=img,
-                is_cover=(idx == 0) # Mark the first uploaded image as cover
-            )
+        has_cover = False
+
+        # Attach pre-uploaded images by ID (Step 2 flow)
+        if image_ids:
+            pre_uploaded = ListingImage.objects.filter(id__in=image_ids)
+            for idx, img_obj in enumerate(pre_uploaded):
+                img_obj.listing = listing
+                if not has_cover:
+                    img_obj.is_cover = True
+                    has_cover = True
+                img_obj.save()
+
+        # Attach direct uploaded images
+        if uploaded_images:
+            for idx, img in enumerate(uploaded_images):
+                ListingImage.objects.create(
+                    listing=listing,
+                    image=img,
+                    is_cover=(not has_cover and idx == 0)
+                )
+                if idx == 0:
+                    has_cover = True
 
         return listing

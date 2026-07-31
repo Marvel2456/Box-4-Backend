@@ -69,7 +69,7 @@ from core.image_processing import process_and_convert_to_webp
 
 class ListingImage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    listing = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name='images')
+    listing = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name='images', null=True, blank=True)
     image = models.ImageField(upload_to='listings/')
     is_cover = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
