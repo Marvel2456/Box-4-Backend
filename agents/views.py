@@ -1,6 +1,8 @@
 from rest_framework import permissions, status, generics
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 from .models import Listing, ListingImage
 from .serializers import ListingSerializer, ListingImageUploadSerializer, ListingImageSerializer
 from profiles.models import AgentProfile
@@ -136,24 +138,47 @@ class ListingFeatureView(generics.GenericAPIView):
 
 class ListingUploadPhotosView(generics.GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = (MultiPartParser, FormParser)
     serializer_class = ListingImageUploadSerializer
 
     @swagger_auto_schema(
         operation_description="Upload property photos (Step 2 flow). Auto-converts photos to WebP format.",
-        request_body=ListingImageUploadSerializer,
-        responses={201: "Photos uploaded successfully."}
+        manual_parameters=[
+            openapi.Parameter(
+                name='images',
+                in_=openapi.IN_FORM,
+                description='Property photo file to upload.',
+                type=openapi.TYPE_FILE,
+                required=False
+            ),
+            openapi.Parameter(
+                name='image',
+                in_=openapi.IN_FORM,
+                description='Single property photo file to upload.',
+                type=openapi.TYPE_FILE,
+                required=False
+            ),
+            openapi.Parameter(
+                name='listing_id',
+                in_=openapi.IN_FORM,
+                description='Optional UUID of an existing listing to attach photos to.',
+                type=openapi.TYPE_STRING,
+                required=False
+            ),
+        ],
+        consumes=['multipart/form-data'],
+        responses={201: ListingImageSerializer(many=True)}
     )
     def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        images = serializer.validated_data.get('images', [])
-        single_image = serializer.validated_data.get('image')
-        if single_image:
-            images = list(images)
+        images = request.FILES.getlist('images')
+        single_image = request.FILES.get('image')
+        if single_image and single_image not in images:
             images.append(single_image)
 
-        listing_id = serializer.validated_data.get('listing_id')
+        if not images:
+            return Response({"error": "At least one image file must be provided under 'images' or 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        listing_id = request.data.get('listing_id')
         listing = None
         if listing_id:
             try:
