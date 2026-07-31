@@ -12,18 +12,8 @@ class ListingImageSerializer(serializers.ModelSerializer):
 
 
 class ListingImageUploadSerializer(serializers.Serializer):
-    images = serializers.ListField(
-        child=serializers.ImageField(max_length=10000000, allow_empty_file=False),
-        required=False,
-        help_text="List of property image files to upload."
-    )
-    image = serializers.ImageField(required=False, help_text="Single property image file to upload.")
+    image = serializers.ImageField(required=False, help_text="Property photo file to upload.")
     listing_id = serializers.UUIDField(required=False, allow_null=True, help_text="Optional ID of listing to attach images to.")
-
-    def validate(self, attrs):
-        if not attrs.get('images') and not attrs.get('image'):
-            raise serializers.ValidationError("At least one image file must be provided under 'images' or 'image'.")
-        return attrs
 
 
 class ListingSerializer(serializers.ModelSerializer):
