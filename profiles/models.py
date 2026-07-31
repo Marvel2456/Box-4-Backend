@@ -18,6 +18,8 @@ class Plan(models.Model):
         return f"{self.name} (${self.price})"
 
 
+from core.image_processing import process_and_convert_to_webp
+
 class BuyerProfile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='buyer_profile')
@@ -34,6 +36,11 @@ class BuyerProfile(models.Model):
     country = models.CharField(max_length=100, blank=True, null=True)
     
     bio = models.TextField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if self.profile_picture and not self.profile_picture.name.lower().endswith('.webp'):
+            self.profile_picture = process_and_convert_to_webp(self.profile_picture, max_dimension=800, quality=90)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Buyer Profile of {self.user.email}"
@@ -63,6 +70,11 @@ class AgentProfile(models.Model):
     rating = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True)
     is_verified = models.BooleanField(default=False)
 
+    def save(self, *args, **kwargs):
+        if self.profile_picture and not self.profile_picture.name.lower().endswith('.webp'):
+            self.profile_picture = process_and_convert_to_webp(self.profile_picture, max_dimension=800, quality=90)
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"Agent Profile of {self.user.email}"
 
@@ -73,6 +85,11 @@ class AdminProfile(models.Model):
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     profile_picture = models.ImageField(upload_to='profiles/admins/', blank=True, null=True)
     bio = models.TextField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if self.profile_picture and not self.profile_picture.name.lower().endswith('.webp'):
+            self.profile_picture = process_and_convert_to_webp(self.profile_picture, max_dimension=800, quality=90)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Admin Profile of {self.user.email}"

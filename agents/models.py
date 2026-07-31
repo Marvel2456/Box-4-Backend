@@ -65,12 +65,19 @@ class Listing(models.Model):
         return f"{self.title} - {self.category} (${self.price})"
 
 
+from core.image_processing import process_and_convert_to_webp
+
 class ListingImage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     listing = models.ForeignKey(Listing, on_delete=models.CASCADE, related_name='images')
     image = models.ImageField(upload_to='listings/')
     is_cover = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.image and not self.image.name.lower().endswith('.webp'):
+            self.image = process_and_convert_to_webp(self.image, max_dimension=1920, quality=88)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Image for {self.listing.title}"
