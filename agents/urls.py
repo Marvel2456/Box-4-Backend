@@ -6,10 +6,14 @@ from .views import (
     ListingFeatureView,
     ListingUploadPhotosView,
     ListingDeletePhotoView,
+    AgentDashboardView,
+    AgentMyListingsView,
 )
 
 urlpatterns = [
+    path('dashboard/', AgentDashboardView.as_view(), name='agent-dashboard'),
     path('properties/', ListingListCreateView.as_view(), name='listing-list'),
+    path('properties/my-listings/', AgentMyListingsView.as_view(), name='agent-my-listings'),
     path('properties/upload-photos/', ListingUploadPhotosView.as_view(), name='listing-upload-photos'),
     path('properties/images/<uuid:image_id>/', ListingDeletePhotoView.as_view(), name='listing-delete-photo'),
     path('properties/<uuid:pk>/', ListingDetailView.as_view(), name='listing-detail'),

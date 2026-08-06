@@ -57,6 +57,7 @@ class Listing(models.Model):
     is_boosted = models.BooleanField(default=False)
     is_featured = models.BooleanField(default=False)
     is_reported = models.BooleanField(default=False)
+    views_count = models.PositiveIntegerField(default=0, help_text="Number of views on this listing.")
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

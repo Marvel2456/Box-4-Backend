@@ -292,3 +292,38 @@ class ListingAPITests(APITestCase):
         listing_obj = Listing.objects.get(pk=create_res.data['id'])
         self.assertEqual(listing_obj.images.count(), 1)
 
+    def test_agent_dashboard_overview_and_my_listings_endpoints(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Create property for agent1
+        Listing.objects.create(
+            agent=self.agent_user,
+            title="Luxury Apartment in Lekki",
+            category="apartment",
+            price=10000000.00,
+            address="Ikorodu street lagos",
+            latitude=6.4,
+            longitude=3.4,
+            views_count=17,
+            status="active"
+        )
+
+        # 2. Test Agent Dashboard Endpoint (Screen 1 UI)
+        dash_url = reverse('agent-dashboard')
+        dash_res = self.client.get(dash_url)
+        self.assertEqual(dash_res.status_code, status.HTTP_200_OK)
+        self.assertIn("Hey,", dash_res.data['greeting'])
+        self.assertIn("active_listings", dash_res.data['metrics'])
+        self.assertIn("subscription", dash_res.data['metrics'])
+        self.assertEqual(len(dash_res.data['active_listings']), 1)
+
+        # 3. Test Agent My Listings Endpoint (Screen 2 UI)
+        my_listings_url = reverse('agent-my-listings')
+        my_res = self.client.get(my_listings_url, {'type': 'all'})
+        self.assertEqual(my_res.status_code, status.HTTP_200_OK)
+        results = my_res.data['results'] if 'results' in my_res.data else my_res.data
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['views_count'], 17)
+
+

@@ -1,10 +1,19 @@
 from rest_framework import permissions, status, generics
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
+from django.db.models import Q, Sum
+from django.utils import timezone
+from datetime import timedelta
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+
 from .models import Listing, ListingImage
-from .serializers import ListingSerializer, ListingImageUploadSerializer, ListingImageSerializer
+from .serializers import (
+    ListingSerializer, 
+    ListingImageUploadSerializer, 
+    ListingImageSerializer,
+    AgentDashboardResponseSerializer
+)
 from profiles.models import AgentProfile
 
 class IsAgentOwnerOrReadOnly(permissions.BasePermission):
@@ -22,9 +31,152 @@ class IsAgentOwnerOrReadOnly(permissions.BasePermission):
 
 
 class ListingListCreateView(generics.ListCreateAPIView):
-    queryset = Listing.objects.all().order_by('-created_at')
     serializer_class = ListingSerializer
     permission_classes = [IsAgentOwnerOrReadOnly]
+
+    def get_queryset(self):
+        queryset = Listing.objects.all().order_by('-created_at')
+
+        # Filter by Tab Type (All, Luxury, Residential, Commercial)
+        tab_type = self.request.query_params.get('type') or self.request.query_params.get('tab')
+        if tab_type:
+            tab_type = tab_type.lower()
+            if tab_type == 'luxury':
+                queryset = queryset.filter(Q(is_featured=True) | Q(category__in=['villa', 'duplex', 'mansion']) | Q(price__gte=15000000))
+            elif tab_type == 'residential':
+                queryset = queryset.filter(category__in=['house', 'apartment', 'villa', 'condo', 'bungalow', 'duplex', 'single_flat', 'lodge', 'airbnb'])
+            elif tab_type == 'commercial':
+                queryset = queryset.filter(category__in=['mall', 'shop', 'plaza', 'multi_story_building', 'hotel', 'land'])
+
+        category = self.request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(category=category)
+
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(address__icontains=search) |
+                Q(category__icontains=search)
+            )
+
+        return queryset
+
+
+class AgentDashboardView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = AgentDashboardResponseSerializer
+
+    @swagger_auto_schema(
+        operation_description="Get Agent Home Dashboard Overview (Greeting, Active Listings metric, New Inquiries metric, Subscription details, Total Views metric, and recent active listings list).",
+        responses={200: AgentDashboardResponseSerializer}
+    )
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        display_name = user.full_name or user.email.split('@')[0]
+
+        # 1. Profile Picture & Subscription
+        profile_picture = None
+        plan_name = "Free"
+        days_left = 30
+        try:
+            if hasattr(user, 'agent_profile') and user.agent_profile:
+                profile = user.agent_profile
+                if profile.profile_picture:
+                    profile_picture = request.build_absolute_uri(profile.profile_picture.url)
+                if profile.plan:
+                    plan_name = profile.plan.name
+        except Exception:
+            pass
+
+        # 2. Agent Listings
+        user_listings = Listing.objects.filter(agent=user)
+        active_listings_qs = user_listings.filter(status='active')
+        active_count = active_listings_qs.count()
+
+        # Listings added this week
+        one_week_ago = timezone.now() - timedelta(days=7)
+        this_week_count = active_listings_qs.filter(created_at__gte=one_week_ago).count()
+
+        # 3. New Inquiries (Messages received for user's listings)
+        from chat.models import Message
+        new_inquiries_count = Message.objects.filter(receiver=user).count()
+
+        # 4. Total Views across all agent's listings
+        total_views = user_listings.aggregate(total=Sum('views_count'))['total'] or 0
+
+        metrics = {
+            "active_listings": {
+                "count": active_count,
+                "note": f"{this_week_count} This week"
+            },
+            "new_inquiries": {
+                "count": new_inquiries_count,
+                "note": "Total inquiries"
+            },
+            "subscription": {
+                "plan_name": plan_name,
+                "days_left": days_left,
+                "days_left_text": f"{days_left} Days left"
+            },
+            "views": {
+                "total_views": total_views,
+                "trend": "-3"
+            }
+        }
+
+        # Recent active listings for dashboard
+        active_listings_data = ListingSerializer(active_listings_qs.order_by('-created_at')[:10], many=True, context={'request': request}).data
+
+        return Response({
+            "greeting": f"Hey, {display_name}!",
+            "agent": {
+                "id": str(user.id),
+                "full_name": user.full_name,
+                "email": user.email,
+                "profile_picture": profile_picture
+            },
+            "metrics": metrics,
+            "active_listings": active_listings_data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentMyListingsView(generics.ListAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        queryset = Listing.objects.filter(agent=user).order_by('-created_at')
+
+        # Filter by Tab Type (All, Luxury, Residential, Commercial)
+        tab_type = self.request.query_params.get('type') or self.request.query_params.get('tab')
+        if tab_type:
+            tab_type = tab_type.lower()
+            if tab_type == 'luxury':
+                queryset = queryset.filter(Q(is_featured=True) | Q(category__in=['villa', 'duplex', 'mansion']) | Q(price__gte=15000000))
+            elif tab_type == 'residential':
+                queryset = queryset.filter(category__in=['house', 'apartment', 'villa', 'condo', 'bungalow', 'duplex', 'single_flat', 'lodge', 'airbnb'])
+            elif tab_type == 'commercial':
+                queryset = queryset.filter(category__in=['mall', 'shop', 'plaza', 'multi_story_building', 'hotel', 'land'])
+
+        # Search filter
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(title__icontains=search) |
+                Q(address__icontains=search) |
+                Q(category__icontains=search)
+            )
+
+        return queryset
+
+    @swagger_auto_schema(
+        operation_description="Get Agent My Listings management list (Screen 2). Supports tab filter (?type=all|luxury|residential|commercial) and search (?search=apartment).",
+        responses={200: ListingSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
 
 class ListingDetailView(generics.RetrieveUpdateDestroyAPIView):

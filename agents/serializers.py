@@ -18,6 +18,8 @@ class ListingImageUploadSerializer(serializers.Serializer):
 
 class ListingSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
+    cover_photo = serializers.SerializerMethodField()
+    inquiries_count = serializers.SerializerMethodField()
     image_ids = serializers.ListField(
         child=serializers.UUIDField(),
         write_only=True,
@@ -37,10 +39,26 @@ class ListingSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'agent', 'agent_name', 'title', 'category', 'price', 'address',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
-            'total_rooms', 'facilities', 'is_published', 'is_boosted',
-            'is_featured', 'images', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
+            'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
+            'is_featured', 'views_count', 'inquiries_count', 'cover_photo',
+            'images', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
+
+    def get_cover_photo(self, obj):
+        cover = obj.images.filter(is_cover=True).first()
+        if not cover:
+            cover = obj.images.first()
+        if cover and cover.image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(cover.image.url)
+            return cover.image.url
+        return None
+
+    def get_inquiries_count(self, obj):
+        from chat.models import Message
+        return Message.objects.filter(listing=obj).count()
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -99,3 +117,17 @@ class ListingSerializer(serializers.ModelSerializer):
                     has_cover = True
 
         return listing
+
+
+class AgentDashboardMetricsSerializer(serializers.Serializer):
+    active_listings = serializers.DictField()
+    new_inquiries = serializers.DictField()
+    subscription = serializers.DictField()
+    views = serializers.DictField()
+
+
+class AgentDashboardResponseSerializer(serializers.Serializer):
+    greeting = serializers.CharField()
+    agent = serializers.DictField()
+    metrics = AgentDashboardMetricsSerializer()
+    active_listings = ListingSerializer(many=True)
