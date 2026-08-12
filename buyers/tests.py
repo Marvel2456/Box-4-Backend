@@ -161,3 +161,15 @@ class BuyerAPITests(APITestCase):
         del_response = self.client.delete(delete_url)
         self.assertEqual(del_response.status_code, status.HTTP_200_OK)
         self.assertFalse(SavedListing.objects.filter(buyer=self.buyer_user, listing=self.listing_a).exists())
+
+    def test_buyer_profile_endpoint(self):
+        token = self.get_jwt_token("buyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        profile_url = reverse('buyer-profile')
+        get_res = self.client.get(profile_url)
+        self.assertEqual(get_res.status_code, status.HTTP_200_OK)
+
+        update_res = self.client.patch(profile_url, {"city": "Lagos", "bio": "Looking for modern apartments."})
+        self.assertEqual(update_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_res.data['city'], "Lagos")

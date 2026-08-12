@@ -15,6 +15,7 @@ from .serializers import (
     AgentDashboardResponseSerializer
 )
 from profiles.models import AgentProfile
+from profiles.serializers import AgentProfileSerializer
 
 class IsAgentOwnerOrReadOnly(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -374,3 +375,16 @@ class ListingDeletePhotoView(generics.DestroyAPIView):
 
         image_obj.delete()
         return Response({"message": "Photo deleted successfully.", "id": str(image_id)}, status=status.HTTP_200_OK)
+
+
+class AgentProfileDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = AgentProfileSerializer
+
+    def get_object(self):
+        profile, _ = AgentProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+    def update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)

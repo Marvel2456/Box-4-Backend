@@ -1,5 +1,4 @@
-from django.shortcuts import render
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
@@ -12,8 +11,23 @@ from .models import SavedListing
 from .serializers import SavedListingSerializer, AgentDetailSerializer
 from agents.models import Listing
 from agents.serializers import ListingSerializer
+from profiles.models import BuyerProfile
+from profiles.serializers import BuyerProfileSerializer
 
 User = get_user_model()
+
+
+class BuyerProfileDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = BuyerProfileSerializer
+
+    def get_object(self):
+        profile, _ = BuyerProfile.objects.get_or_create(user=self.request.user)
+        return profile
+
+    def update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return super().update(request, *args, **kwargs)
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     # Convert decimal degrees to radians

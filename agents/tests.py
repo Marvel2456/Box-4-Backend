@@ -326,4 +326,16 @@ class ListingAPITests(APITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['views_count'], 17)
 
+    def test_agent_profile_endpoint(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        profile_url = reverse('agent-profile')
+        get_res = self.client.get(profile_url)
+        self.assertEqual(get_res.status_code, status.HTTP_200_OK)
+
+        update_res = self.client.patch(profile_url, {"agency_name": "Lagos Realty", "bio": "Top property agent."})
+        self.assertEqual(update_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(update_res.data['agency_name'], "Lagos Realty")
+
 
