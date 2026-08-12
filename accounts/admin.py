@@ -4,7 +4,7 @@ from unfold.admin import ModelAdmin
 from .models import User, EmailOTP
 
 # Unfold-styled User admin
-class CustomUserAdmin(BaseUserAdmin, ModelAdmin):
+class CustomUserAdmin(ModelAdmin, BaseUserAdmin):
     model = User
     list_display = ['email', 'username', 'role', 'is_email_verified', 'is_staff']
     fieldsets = BaseUserAdmin.fieldsets + (
