@@ -35,7 +35,9 @@ from .views import (
     AdminSubscriptionDetailView,
     AdminSendSubscriptionReminderView,
     AdminFeatureDetailView,
-    AdminSendFeatureReminderView
+    AdminSendFeatureReminderView,
+    AdminCategoryListCreateView,
+    AdminCategoryDetailView
 )
 
 urlpatterns = [
@@ -49,6 +51,10 @@ urlpatterns = [
 
     # Analytics Overview Dashboard
     path('overview/', OverviewDashboardView.as_view(), name='admin-overview'),
+
+    # Categories Management
+    path('categories/', AdminCategoryListCreateView.as_view(), name='admin-categories-list'),
+    path('categories/<uuid:pk>/', AdminCategoryDetailView.as_view(), name='admin-categories-detail'),
 
     # Property Listings Management
     path('properties/', AdminAllPropertiesListView.as_view(), name='admin-properties-all'),

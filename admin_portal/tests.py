@@ -476,6 +476,31 @@ class AdminPortalAPITests(APITestCase):
             "role": "moderator"
         }).status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_admin_category_crud_and_agent_list_endpoints(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        admin_token = str(RefreshToken.for_user(self.admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_token}')
+
+        # 1. Admin creates category
+        cat_url = reverse('admin-categories-list')
+        create_res = self.client.post(cat_url, {
+            "name": "Penthouse",
+            "description": "Luxury top-floor apartments."
+        }, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_res.data['slug'], 'penthouse')
+
+        # 2. Admin views category list
+        list_res = self.client.get(cat_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+
+        # 3. Agent views categories list
+        agent_cat_url = reverse('agent-categories')
+        agent_res = self.client.get(agent_cat_url)
+        self.assertEqual(agent_res.status_code, status.HTTP_200_OK)
+        results = agent_res.data['results'] if isinstance(agent_res.data, dict) and 'results' in agent_res.data else agent_res.data
+        self.assertTrue(any(c['name'] == 'Penthouse' for c in results))
+
 
 
 

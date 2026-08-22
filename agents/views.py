@@ -7,12 +7,13 @@ from datetime import timedelta
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .models import Listing, ListingImage
+from .models import Listing, ListingImage, Category
 from .serializers import (
     ListingSerializer, 
     ListingImageUploadSerializer, 
     ListingImageSerializer,
-    AgentDashboardResponseSerializer
+    AgentDashboardResponseSerializer,
+    CategorySerializer
 )
 from profiles.models import AgentProfile
 from profiles.serializers import AgentProfileSerializer
@@ -388,3 +389,28 @@ class AgentProfileDetailView(generics.RetrieveUpdateAPIView):
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return super().update(request, *args, **kwargs)
+
+
+class CategoryListView(generics.ListAPIView):
+    permission_classes = [permissions.AllowAny]
+    serializer_class = CategorySerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        if Category.objects.count() == 0:
+            default_categories = [
+                'House', 'Apartment', 'Lodge', 'Mall', 'Hotel', 'Villa',
+                'Condo', 'Shop', 'Land', 'Bungalow', 'Plaza', 'Duplex',
+                'Multi-story Building', 'Single flat', 'Airbnb'
+            ]
+            for cat_name in default_categories:
+                Category.objects.get_or_create(name=cat_name)
+
+        return Category.objects.filter(is_active=True).order_by('name')
+
+    @swagger_auto_schema(
+        operation_description="Get list of active property categories for agents & buyers.",
+        responses={200: CategorySerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)

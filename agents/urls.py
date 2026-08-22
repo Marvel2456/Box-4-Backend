@@ -9,9 +9,11 @@ from .views import (
     AgentDashboardView,
     AgentMyListingsView,
     AgentProfileDetailView,
+    CategoryListView,
 )
 
 urlpatterns = [
+    path('categories/', CategoryListView.as_view(), name='agent-categories'),
     path('profile/', AgentProfileDetailView.as_view(), name='agent-profile'),
     path('dashboard/', AgentDashboardView.as_view(), name='agent-dashboard'),
     path('properties/', ListingListCreateView.as_view(), name='listing-list'),

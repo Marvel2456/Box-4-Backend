@@ -1,9 +1,15 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Listing, ListingImage
+from .models import Listing, ListingImage, Category
 from profiles.models import AgentProfile
 
 User = get_user_model()
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ('id', 'name', 'slug', 'description', 'icon', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'slug', 'created_at', 'updated_at')
 
 class ListingImageSerializer(serializers.ModelSerializer):
     class Meta:

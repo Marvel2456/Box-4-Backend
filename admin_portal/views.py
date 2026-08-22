@@ -42,7 +42,8 @@ from .serializers import (
     AdminSubscriptionDetailSerializer,
     AdminFeatureDetailSerializer
 )
-from agents.models import Listing, Report
+from agents.models import Listing, Report, Category
+from agents.serializers import CategorySerializer
 from profiles.models import AgentProfile, Plan, AdminProfile, AgentSubscription, FeaturedPlan, ListingFeature
 from core.pagination import CustomPageNumberPagination
 
@@ -1468,6 +1469,47 @@ class AdminSendFeatureReminderView(generics.GenericAPIView):
             "message": f"Featured placement expiration reminder sent for listing '{feature.listing.title}'.",
             "id": str(feature.id)
         }, status=status.HTTP_200_OK)
+
+
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+class AdminCategoryListCreateView(generics.ListCreateAPIView):
+    queryset = Category.objects.all().order_by('-created_at')
+    serializer_class = CategorySerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+    permission_classes = [IsAdminOrModeratorRole]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAdminOnlyRole()]
+        return [IsAdminOrModeratorRole()]
+
+    @swagger_auto_schema(
+        operation_description="List all categories for Admin (paginated).",
+        responses={200: CategorySerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_description="Create a new property category (Admin only). Supports file upload for category icon.",
+        request_body=CategorySerializer,
+        responses={201: CategorySerializer}
+    )
+    def post(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+
+class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+    permission_classes = [IsAdminOrModeratorRole]
+
+    def get_permissions(self):
+        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
+            return [IsAdminOnlyRole()]
+        return [IsAdminOrModeratorRole()]
 
 
 
