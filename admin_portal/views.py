@@ -1492,7 +1492,7 @@ class AdminCategoryListCreateView(generics.ListCreateAPIView):
         return super().get(request, *args, **kwargs)
 
     @swagger_auto_schema(
-        operation_description="Create a new property category (Admin only). Supports file upload for category icon.",
+        operation_description="Create a new property category (Admin only).",
         request_body=CategorySerializer,
         responses={201: CategorySerializer}
     )

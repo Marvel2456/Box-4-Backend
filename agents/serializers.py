@@ -8,8 +8,8 @@ User = get_user_model()
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
-        fields = ('id', 'name', 'slug', 'description', 'icon', 'is_active', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'slug', 'created_at', 'updated_at')
+        fields = ('id', 'name', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
 
 class ListingImageSerializer(serializers.ModelSerializer):
     class Meta:

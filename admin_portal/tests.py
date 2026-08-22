@@ -484,11 +484,10 @@ class AdminPortalAPITests(APITestCase):
         # 1. Admin creates category
         cat_url = reverse('admin-categories-list')
         create_res = self.client.post(cat_url, {
-            "name": "Penthouse",
-            "description": "Luxury top-floor apartments."
+            "name": "Penthouse"
         }, format='json')
         self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(create_res.data['slug'], 'penthouse')
+        self.assertEqual(create_res.data['name'], 'Penthouse')
 
         # 2. Admin views category list
         list_res = self.client.get(cat_url)
