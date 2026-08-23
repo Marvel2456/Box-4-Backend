@@ -21,6 +21,9 @@ from django.conf.urls.static import static
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view
 from drf_yasg import openapi
+from django.views.generic import RedirectView
+
+from core.views import DirectMediaUploadView
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -33,12 +36,12 @@ schema_view = get_schema_view(
    permission_classes=(permissions.AllowAny,),
 )
 
-from django.views.generic import RedirectView
-
 urlpatterns = [
     path('', RedirectView.as_view(url='/api/v1/', permanent=False)),
     path('admin/', admin.site.urls),
     path("api/v1/", include([
+        path('media/upload/', DirectMediaUploadView.as_view(), name='media-upload'),
+        path('upload/media/', DirectMediaUploadView.as_view(), name='direct-media-upload'),
         path('auth/', include('accounts.urls')),
         path('profiles/', include('profiles.urls')),
         path('agents/', include('agents.urls')),
@@ -47,14 +50,13 @@ urlpatterns = [
         path('notifications/', include('notifications.urls')),
         path('admin-portal/', include('admin_portal.urls')),
     
-    # Swagger & ReDoc Documentation
+        # Swagger & ReDoc Documentation
         path('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
         path('api/api.json', schema_view.without_ui(cache_timeout=0), name='schema-swagger-ui'),
         path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
     ]))
-
 ]
+
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
-
