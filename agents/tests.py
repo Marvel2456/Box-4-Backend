@@ -115,6 +115,27 @@ class ListingAPITests(APITestCase):
         self.assertIsNotNone(response.data['cover_photo'])
         self.assertEqual(len(response.data['images']), 2)
 
+    def test_create_listing_with_explicit_thumbnail_url(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        data = {
+            "title": "Villa with Thumbnail Selection",
+            "category": "villa",
+            "price": "90000000.00",
+            "address": "Ikoyi, Lagos",
+            "latitude": "6.454400",
+            "longitude": "3.439200",
+            "cover_photo_url": "https://box4realestate.cloud/media/listings/house2.webp",
+            "image_urls": [
+                "https://box4realestate.cloud/media/listings/house1.webp",
+                "https://box4realestate.cloud/media/listings/house2.webp"
+            ]
+        }
+        response = self.client.post(self.list_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIn('house2.webp', response.data['cover_photo'])
+
     def test_create_listing_denied_for_buyer(self):
         token = self.get_jwt_token("buyer1@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')

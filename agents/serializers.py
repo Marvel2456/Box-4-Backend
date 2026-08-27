@@ -26,6 +26,13 @@ class ListingSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
     cover_photo = serializers.SerializerMethodField()
     inquiries_count = serializers.SerializerMethodField()
+    cover_photo_url = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        help_text="Optional specific image URL or path to mark as the primary thumbnail/cover photo."
+    )
     image_urls = serializers.ListField(
         child=serializers.CharField(),
         write_only=True,
@@ -52,7 +59,7 @@ class ListingSerializer(serializers.ModelSerializer):
             'id', 'agent', 'agent_name', 'title', 'category', 'price', 'address',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
-            'is_featured', 'views_count', 'inquiries_count', 'cover_photo',
+            'is_featured', 'views_count', 'inquiries_count', 'cover_photo', 'cover_photo_url',
             'images', 'image_urls', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
@@ -71,6 +78,17 @@ class ListingSerializer(serializers.ModelSerializer):
     def get_inquiries_count(self, obj):
         from chat.models import Message
         return Message.objects.filter(listing=obj).count()
+
+    def _clean_media_path(self, url_str):
+        if not url_str:
+            return ""
+        from urllib.parse import urlparse
+        clean_path = str(url_str).strip()
+        if '/media/' in clean_path:
+            clean_path = clean_path.split('/media/', 1)[1]
+        elif clean_path.startswith('http://') or clean_path.startswith('https://'):
+            clean_path = urlparse(clean_path).path.lstrip('/')
+        return clean_path
 
     def validate(self, attrs):
         request = self.context.get('request')
@@ -99,34 +117,46 @@ class ListingSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        cover_photo_url = validated_data.pop('cover_photo_url', None) or self.initial_data.get('cover_photo_url') or self.initial_data.get('thumbnail_url') or self.initial_data.get('cover_photo')
         image_urls = validated_data.pop('image_urls', [])
         image_ids = validated_data.pop('image_ids', [])
         uploaded_images = validated_data.pop('uploaded_images', [])
-        # Assign current request user as agent
+
         validated_data['agent'] = self.context['request'].user
         listing = Listing.objects.create(**validated_data)
 
+        target_cover_path = self._clean_media_path(cover_photo_url) if cover_photo_url else None
         has_cover = False
 
-        # 1. Attach images by URL (from POST /api/v1/media/upload/)
+        # 1. Attach images by URL
         if image_urls:
-            from urllib.parse import urlparse
             for idx, url_str in enumerate(image_urls):
                 if not url_str:
                     continue
-                clean_path = str(url_str).strip()
-                if '/media/' in clean_path:
-                    clean_path = clean_path.split('/media/', 1)[1]
-                elif clean_path.startswith('http://') or clean_path.startswith('https://'):
-                    clean_path = urlparse(clean_path).path.lstrip('/')
+                clean_path = self._clean_media_path(url_str)
+                is_cover_photo = False
+                if target_cover_path:
+                    if clean_path == target_cover_path:
+                        is_cover_photo = True
+                        has_cover = True
+                elif idx == 0 and not has_cover:
+                    is_cover_photo = True
+                    has_cover = True
 
                 ListingImage.objects.create(
                     listing=listing,
                     image=clean_path,
-                    is_cover=(not has_cover and idx == 0)
+                    is_cover=is_cover_photo
                 )
-                if idx == 0:
-                    has_cover = True
+
+        # Explicit target cover photo URL creation if not present in image_urls list
+        if target_cover_path and not has_cover:
+            ListingImage.objects.create(
+                listing=listing,
+                image=target_cover_path,
+                is_cover=True
+            )
+            has_cover = True
 
         # 2. Attach pre-uploaded images by ID (Step 2 flow)
         if image_ids:
@@ -138,7 +168,7 @@ class ListingSerializer(serializers.ModelSerializer):
                     has_cover = True
                 img_obj.save()
 
-        # 3. Attach direct uploaded images
+        # 3. Attach direct uploaded files
         if uploaded_images:
             for idx, img in enumerate(uploaded_images):
                 ListingImage.objects.create(
@@ -146,38 +176,59 @@ class ListingSerializer(serializers.ModelSerializer):
                     image=img,
                     is_cover=(not has_cover and idx == 0)
                 )
-                if idx == 0:
+                if not has_cover and idx == 0:
                     has_cover = True
 
         return listing
 
     def update(self, instance, validated_data):
+        cover_photo_url = validated_data.pop('cover_photo_url', None) or self.initial_data.get('cover_photo_url') or self.initial_data.get('thumbnail_url') or self.initial_data.get('cover_photo')
         image_urls = validated_data.pop('image_urls', None)
         image_ids = validated_data.pop('image_ids', None)
         uploaded_images = validated_data.pop('uploaded_images', None)
 
         listing = super().update(instance, validated_data)
 
+        target_cover_path = self._clean_media_path(cover_photo_url) if cover_photo_url else None
         has_cover = instance.images.filter(is_cover=True).exists()
 
+        if target_cover_path:
+            # Unset previous cover photos
+            instance.images.filter(is_cover=True).update(is_cover=False)
+            has_cover = False
+
         if image_urls is not None:
-            from urllib.parse import urlparse
             for idx, url_str in enumerate(image_urls):
                 if not url_str:
                     continue
-                clean_path = str(url_str).strip()
-                if '/media/' in clean_path:
-                    clean_path = clean_path.split('/media/', 1)[1]
-                elif clean_path.startswith('http://') or clean_path.startswith('https://'):
-                    clean_path = urlparse(clean_path).path.lstrip('/')
+                clean_path = self._clean_media_path(url_str)
+                is_cover_photo = False
+                if target_cover_path:
+                    if clean_path == target_cover_path:
+                        is_cover_photo = True
+                        has_cover = True
+                elif idx == 0 and not has_cover:
+                    is_cover_photo = True
+                    has_cover = True
 
                 ListingImage.objects.create(
                     listing=listing,
                     image=clean_path,
-                    is_cover=(not has_cover and idx == 0)
+                    is_cover=is_cover_photo
                 )
-                if idx == 0:
-                    has_cover = True
+
+        if target_cover_path and not has_cover:
+            # Check if image already exists under listing
+            existing = instance.images.filter(image__contains=target_cover_path.split('/')[-1]).first()
+            if existing:
+                existing.is_cover = True
+                existing.save()
+            else:
+                ListingImage.objects.create(
+                    listing=listing,
+                    image=target_cover_path,
+                    is_cover=True
+                )
 
         if image_ids is not None:
             pre_uploaded = ListingImage.objects.filter(id__in=image_ids)
@@ -195,7 +246,7 @@ class ListingSerializer(serializers.ModelSerializer):
                     image=img,
                     is_cover=(not has_cover and idx == 0)
                 )
-                if idx == 0:
+                if not has_cover and idx == 0:
                     has_cover = True
 
         return listing
