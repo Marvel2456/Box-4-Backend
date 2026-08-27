@@ -26,6 +26,12 @@ class ListingSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
     cover_photo = serializers.SerializerMethodField()
     inquiries_count = serializers.SerializerMethodField()
+    image_urls = serializers.ListField(
+        child=serializers.CharField(),
+        write_only=True,
+        required=False,
+        help_text="List of media URLs (from POST /api/v1/media/upload/) to attach to this listing."
+    )
     image_ids = serializers.ListField(
         child=serializers.UUIDField(),
         write_only=True,
@@ -47,7 +53,7 @@ class ListingSerializer(serializers.ModelSerializer):
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
             'is_featured', 'views_count', 'inquiries_count', 'cover_photo',
-            'images', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
+            'images', 'image_urls', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
 
@@ -93,6 +99,7 @@ class ListingSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        image_urls = validated_data.pop('image_urls', [])
         image_ids = validated_data.pop('image_ids', [])
         uploaded_images = validated_data.pop('uploaded_images', [])
         # Assign current request user as agent
@@ -101,7 +108,27 @@ class ListingSerializer(serializers.ModelSerializer):
 
         has_cover = False
 
-        # Attach pre-uploaded images by ID (Step 2 flow)
+        # 1. Attach images by URL (from POST /api/v1/media/upload/)
+        if image_urls:
+            from urllib.parse import urlparse
+            for idx, url_str in enumerate(image_urls):
+                if not url_str:
+                    continue
+                clean_path = str(url_str).strip()
+                if '/media/' in clean_path:
+                    clean_path = clean_path.split('/media/', 1)[1]
+                elif clean_path.startswith('http://') or clean_path.startswith('https://'):
+                    clean_path = urlparse(clean_path).path.lstrip('/')
+
+                ListingImage.objects.create(
+                    listing=listing,
+                    image=clean_path,
+                    is_cover=(not has_cover and idx == 0)
+                )
+                if idx == 0:
+                    has_cover = True
+
+        # 2. Attach pre-uploaded images by ID (Step 2 flow)
         if image_ids:
             pre_uploaded = ListingImage.objects.filter(id__in=image_ids)
             for idx, img_obj in enumerate(pre_uploaded):
@@ -111,8 +138,57 @@ class ListingSerializer(serializers.ModelSerializer):
                     has_cover = True
                 img_obj.save()
 
-        # Attach direct uploaded images
+        # 3. Attach direct uploaded images
         if uploaded_images:
+            for idx, img in enumerate(uploaded_images):
+                ListingImage.objects.create(
+                    listing=listing,
+                    image=img,
+                    is_cover=(not has_cover and idx == 0)
+                )
+                if idx == 0:
+                    has_cover = True
+
+        return listing
+
+    def update(self, instance, validated_data):
+        image_urls = validated_data.pop('image_urls', None)
+        image_ids = validated_data.pop('image_ids', None)
+        uploaded_images = validated_data.pop('uploaded_images', None)
+
+        listing = super().update(instance, validated_data)
+
+        has_cover = instance.images.filter(is_cover=True).exists()
+
+        if image_urls is not None:
+            from urllib.parse import urlparse
+            for idx, url_str in enumerate(image_urls):
+                if not url_str:
+                    continue
+                clean_path = str(url_str).strip()
+                if '/media/' in clean_path:
+                    clean_path = clean_path.split('/media/', 1)[1]
+                elif clean_path.startswith('http://') or clean_path.startswith('https://'):
+                    clean_path = urlparse(clean_path).path.lstrip('/')
+
+                ListingImage.objects.create(
+                    listing=listing,
+                    image=clean_path,
+                    is_cover=(not has_cover and idx == 0)
+                )
+                if idx == 0:
+                    has_cover = True
+
+        if image_ids is not None:
+            pre_uploaded = ListingImage.objects.filter(id__in=image_ids)
+            for idx, img_obj in enumerate(pre_uploaded):
+                img_obj.listing = listing
+                if not has_cover:
+                    img_obj.is_cover = True
+                    has_cover = True
+                img_obj.save()
+
+        if uploaded_images is not None:
             for idx, img in enumerate(uploaded_images):
                 ListingImage.objects.create(
                     listing=listing,

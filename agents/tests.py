@@ -94,6 +94,27 @@ class ListingAPITests(APITestCase):
         # Verify DB entry
         self.assertEqual(Listing.objects.filter(agent=self.agent_user).count(), 1)
 
+    def test_create_listing_with_image_urls(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        data = {
+            "title": "Luxury Mansion with URLs",
+            "category": "villa",
+            "price": "85000000.00",
+            "address": "Banana Island, Lagos",
+            "latitude": "6.465400",
+            "longitude": "3.460100",
+            "image_urls": [
+                "https://box4realestate.cloud/media/listings/house1.webp",
+                "https://box4realestate.cloud/media/listings/house2.webp"
+            ]
+        }
+        response = self.client.post(self.list_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNotNone(response.data['cover_photo'])
+        self.assertEqual(len(response.data['images']), 2)
+
     def test_create_listing_denied_for_buyer(self):
         token = self.get_jwt_token("buyer1@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
