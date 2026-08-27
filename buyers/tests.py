@@ -170,6 +170,11 @@ class BuyerAPITests(APITestCase):
         get_res = self.client.get(profile_url)
         self.assertEqual(get_res.status_code, status.HTTP_200_OK)
 
-        update_res = self.client.patch(profile_url, {"city": "Lagos", "bio": "Looking for modern apartments."})
+        update_res = self.client.patch(profile_url, {
+            "city": "Lagos",
+            "bio": "Looking for modern apartments.",
+            "profile_picture": "https://box4realestate.cloud/media/profiles/avatar1.webp"
+        }, format='json')
         self.assertEqual(update_res.status_code, status.HTTP_200_OK)
         self.assertEqual(update_res.data['city'], "Lagos")
+        self.assertIsNotNone(update_res.data['profile_picture'])

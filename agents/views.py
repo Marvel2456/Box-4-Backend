@@ -329,8 +329,21 @@ class ListingUploadPhotosView(generics.GenericAPIView):
         if single_image and single_image not in images:
             images.append(single_image)
 
-        if not images:
-            return Response({"error": "At least one image file must be provided under 'images' or 'image'."}, status=status.HTTP_400_BAD_REQUEST)
+        # Support image_urls from POST /api/v1/media/upload/
+        raw_urls = request.data.get('image_urls') or request.data.getlist('image_urls') or []
+        if isinstance(raw_urls, str):
+            image_urls = [raw_urls]
+        elif isinstance(raw_urls, list):
+            image_urls = list(raw_urls)
+        else:
+            image_urls = []
+
+        single_url = request.data.get('image_url') or request.data.get('url')
+        if single_url and single_url not in image_urls:
+            image_urls.append(single_url)
+
+        if not images and not image_urls:
+            return Response({"error": "At least one image file or image URL must be provided."}, status=status.HTTP_400_BAD_REQUEST)
 
         listing_id = request.data.get('listing_id')
         listing = None
@@ -341,17 +354,34 @@ class ListingUploadPhotosView(generics.GenericAPIView):
                 return Response({"error": "Listing not found."}, status=status.HTTP_404_NOT_FOUND)
 
         created_image_objs = []
+        from urllib.parse import urlparse
+        for idx, url_str in enumerate(image_urls):
+            if not url_str:
+                continue
+            clean_path = str(url_str).strip()
+            if '/media/' in clean_path:
+                clean_path = clean_path.split('/media/', 1)[1]
+            elif clean_path.startswith('http://') or clean_path.startswith('https://'):
+                clean_path = urlparse(clean_path).path.lstrip('/')
+
+            img_obj = ListingImage.objects.create(
+                listing=listing,
+                image=clean_path,
+                is_cover=(idx == 0 and listing is not None and listing.images.count() == 0)
+            )
+            created_image_objs.append(img_obj)
+
         for idx, img in enumerate(images):
             img_obj = ListingImage.objects.create(
                 listing=listing,
                 image=img,
-                is_cover=(idx == 0 and listing is not None and listing.images.count() == 0)
+                is_cover=(len(created_image_objs) == 0 and idx == 0 and listing is not None and listing.images.count() == 0)
             )
             created_image_objs.append(img_obj)
 
         output_serializer = ListingImageSerializer(created_image_objs, many=True, context={'request': request})
         return Response({
-            "message": f"Successfully uploaded {len(created_image_objs)} photo(s).",
+            "message": f"Successfully attached {len(created_image_objs)} photo(s).",
             "images": output_serializer.data
         }, status=status.HTTP_201_CREATED)
 
