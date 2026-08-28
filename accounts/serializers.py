@@ -52,12 +52,13 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         # Generate and save OTP
         otp = EmailOTP.objects.create(user=user)
         
-        # Send OTP code (will print to console/stdout in development)
+        # Send OTP code
         try:
+            from django.conf import settings
             send_mail(
                 subject="Email Verification Code",
                 message=f"Your verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email="no-reply@realestate.com",
+                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
                 fail_silently=False,
             )

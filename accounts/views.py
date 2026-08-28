@@ -117,12 +117,13 @@ class OTPResendView(generics.GenericAPIView):
         # Generate new OTP
         otp = EmailOTP.objects.create(user=user)
         
-        # Send Email (console logs in dev)
+        # Send Email
         try:
+            from django.conf import settings
             send_mail(
                 subject="Email Verification Code (Resend)",
                 message=f"Your verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email="no-reply@realestate.com",
+                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
                 fail_silently=False,
             )
@@ -213,12 +214,13 @@ class ForgotPasswordView(generics.GenericAPIView):
         # Generate password reset OTP
         otp = EmailOTP.objects.create(user=user, otp_type='password_reset')
         
-        # Send Email (console logs in dev)
+        # Send Email
         try:
+            from django.conf import settings
             send_mail(
                 subject="Password Reset Verification Code",
                 message=f"Your password reset verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email="no-reply@realestate.com",
+                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
                 fail_silently=False,
             )
