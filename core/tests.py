@@ -70,3 +70,28 @@ class DirectMediaUploadAPITest(APITestCase):
         self.assertIn('filename', response.data)
         self.assertTrue(response.data['filename'].endswith('.webp'))
         self.assertIn('/profiles/', response.data['url'])
+
+
+from unittest.mock import patch
+from core.email_backend import ResendEmailBackend
+from django.core.mail import EmailMessage
+
+class ResendEmailBackendTest(TestCase):
+    @patch('resend.Emails.send')
+    def test_resend_email_sending(self, mock_resend_send):
+        mock_resend_send.return_value = {"id": "msg_12345"}
+        
+        backend = ResendEmailBackend()
+        email = EmailMessage(
+            subject="Welcome to Real Estate",
+            body="Thank you for registering!",
+            from_email="onboarding@resend.dev",
+            to=["testuser@example.com"]
+        )
+        sent = backend.send_messages([email])
+
+        self.assertEqual(sent, 1)
+        mock_resend_send.assert_called_once()
+        call_kwargs = mock_resend_send.call_args[0][0]
+        self.assertEqual(call_kwargs['subject'], "Welcome to Real Estate")
+        self.assertEqual(call_kwargs['to'], ["testuser@example.com"])

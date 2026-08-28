@@ -202,9 +202,14 @@ SIMPLE_JWT = {
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = True
 
-# Email configuration (console backend for development)
-EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@realestate.com')
+# Resend Email Configuration
+RESEND_API_KEY = os.getenv('RESEND_API_KEY')
+if RESEND_API_KEY:
+    EMAIL_BACKEND = 'core.email_backend.ResendEmailBackend'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'onboarding@resend.dev')
 
 
 # Cloudflare R2 Configuration (S3 compatible)
