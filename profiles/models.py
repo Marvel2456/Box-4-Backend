@@ -27,8 +27,8 @@ class BuyerProfile(models.Model):
     profile_picture = models.ImageField(upload_to='profiles/buyers/', blank=True, null=True)
     
     # Location coordinates for nearest property calculations
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    latitude = models.DecimalField(max_digits=18, decimal_places=15, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=18, decimal_places=15, null=True, blank=True)
     
     # Geolocation address info
     city = models.CharField(max_length=100, blank=True, null=True)
@@ -54,8 +54,8 @@ class AgentProfile(models.Model):
     profile_picture = models.ImageField(upload_to='profiles/agents/', blank=True, null=True)
     
     # Location coordinates
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    latitude = models.DecimalField(max_digits=18, decimal_places=15, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=18, decimal_places=15, null=True, blank=True)
     
     # Geolocation address info
     city = models.CharField(max_length=100, blank=True, null=True)
