@@ -6,47 +6,48 @@ from agents.serializers import ListingSerializer
 
 User = get_user_model()
 
-class SavedListingSerializer(serializers.ModelSerializer):
-    listing_details = ListingSerializer(source='listing', read_only=True)
-    listing_id = serializers.PrimaryKeyRelatedField(
-        queryset=Listing.objects.all(), 
-        source='listing', 
-        write_only=True,
-        required=False
-    )
-    listing = serializers.PrimaryKeyRelatedField(
-        queryset=Listing.objects.all(), 
-        write_only=True,
-        required=False
-    )
 
-    class Meta:
-        model = SavedListing
-        fields = ('id', 'buyer', 'listing', 'listing_id', 'listing_details', 'created_at')
-        read_only_fields = ('id', 'buyer', 'created_at')
+class SavedListingCreateSerializer(serializers.Serializer):
+    listing_id = serializers.UUIDField(help_text="UUID of the property listing to save.")
 
     def to_internal_value(self, data):
-        # Support flexible JSON payload keys: listing_id, listing, or id
-        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
-        target_id = mutable_data.get('listing_id') or mutable_data.get('listing') or mutable_data.get('id')
-        if target_id and 'listing' not in mutable_data:
-            mutable_data['listing'] = target_id
-        if target_id and 'listing_id' not in mutable_data:
-            mutable_data['listing_id'] = target_id
-        return super().to_internal_value(mutable_data)
+        if isinstance(data, dict):
+            mutable_data = data.copy()
+            target_id = mutable_data.get('listing_id') or mutable_data.get('listing') or mutable_data.get('id')
+            if target_id:
+                mutable_data['listing_id'] = target_id
+            return super().to_internal_value(mutable_data)
+        return super().to_internal_value(data)
+
+    def validate_listing_id(self, value):
+        try:
+            return Listing.objects.get(pk=value)
+        except Listing.DoesNotExist:
+            raise serializers.ValidationError("Property listing not found.")
 
     def validate(self, attrs):
         request = self.context.get('request')
         buyer = request.user
-        listing = attrs.get('listing')
-
-        if not listing:
-            raise serializers.ValidationError({"listing_id": "This field is required."})
+        listing = attrs.get('listing_id')
 
         if SavedListing.objects.filter(buyer=buyer, listing=listing).exists():
             raise serializers.ValidationError("You have already saved this property listing.")
 
         return attrs
+
+    def create(self, validated_data):
+        buyer = self.context['request'].user
+        listing = validated_data['listing_id']
+        return SavedListing.objects.create(buyer=buyer, listing=listing)
+
+
+class SavedListingSerializer(serializers.ModelSerializer):
+    listing_details = ListingSerializer(source='listing', read_only=True)
+
+    class Meta:
+        model = SavedListing
+        fields = ('id', 'buyer', 'listing', 'listing_details', 'created_at')
+        read_only_fields = ('id', 'buyer', 'listing', 'created_at')
 
 
 class AgentDetailSerializer(serializers.ModelSerializer):

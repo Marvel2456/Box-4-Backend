@@ -10,7 +10,7 @@ from drf_yasg.utils import swagger_auto_schema
 
 from .models import SavedListing
 from .serializers import (
-    SavedListingSerializer, AgentDetailSerializer, BuyerDashboardSerializer
+    SavedListingSerializer, SavedListingCreateSerializer, AgentDetailSerializer, BuyerDashboardSerializer
 )
 from agents.models import Listing
 from agents.serializers import ListingSerializer
@@ -138,8 +138,12 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class SavedListingViewSet(viewsets.ModelViewSet):
-    serializer_class = SavedListingSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return SavedListingCreateSerializer
+        return SavedListingSerializer
 
     def get_queryset(self):
         if getattr(self, 'swagger_fake_view', False):
@@ -147,7 +151,7 @@ class SavedListingViewSet(viewsets.ModelViewSet):
         return SavedListing.objects.filter(buyer=self.request.user)
 
     def perform_create(self, serializer):
-        saved_instance = serializer.save(buyer=self.request.user)
+        saved_instance = serializer.save()
         agent = saved_instance.listing.agent
         if agent != self.request.user:
             from notifications.models import Notification
