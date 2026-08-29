@@ -1,14 +1,17 @@
 from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Q
+from django.db.models import Q, Count, Avg
 from django.contrib.auth import get_user_model
 import math
+from geopy.distance import geodesic
 
 from drf_yasg.utils import swagger_auto_schema
 
 from .models import SavedListing
-from .serializers import SavedListingSerializer, AgentDetailSerializer
+from .serializers import (
+    SavedListingSerializer, AgentDetailSerializer, BuyerDashboardSerializer
+)
 from agents.models import Listing
 from agents.serializers import ListingSerializer
 from profiles.models import BuyerProfile
@@ -28,6 +31,7 @@ class BuyerProfileDetailView(generics.RetrieveUpdateAPIView):
     def update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return super().update(request, *args, **kwargs)
+
 
 def haversine_distance(lat1, lon1, lat2, lon2):
     # Convert decimal degrees to radians
@@ -168,3 +172,110 @@ class SavedListingViewSet(viewsets.ModelViewSet):
 
         saved.delete()
         return Response({"message": "Listing removed from saved properties successfully."}, status=status.HTTP_200_OK)
+
+
+class BuyerDashboardView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = BuyerDashboardSerializer
+
+    @swagger_auto_schema(responses={200: BuyerDashboardSerializer()})
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        profile = getattr(user, 'buyer_profile', None)
+
+        # 1. Determine buyer coordinates
+        lat_param = request.query_params.get('lat') or request.query_params.get('latitude')
+        lng_param = request.query_params.get('lng') or request.query_params.get('longitude')
+
+        buyer_lat = None
+        buyer_lng = None
+
+        if lat_param and lng_param:
+            try:
+                buyer_lat = float(lat_param)
+                buyer_lng = float(lng_param)
+            except (ValueError, TypeError):
+                pass
+
+        if buyer_lat is None and profile and profile.latitude is not None and profile.longitude is not None:
+            try:
+                buyer_lat = float(profile.latitude)
+                buyer_lng = float(profile.longitude)
+            except (ValueError, TypeError):
+                pass
+
+        user_location_data = {
+            "latitude": buyer_lat,
+            "longitude": buyer_lng,
+            "city": profile.city if profile else None,
+            "state": profile.state if profile else None,
+            "country": profile.country if profile else None,
+        }
+
+        # 2. Nearest 10 Properties via Geopy geodesic distance
+        all_published_listings = Listing.objects.filter(is_published=True, status='active').prefetch_related('images', 'agent')
+        
+        nearest_properties_data = []
+
+        if buyer_lat is not None and buyer_lng is not None:
+            user_coords = (buyer_lat, buyer_lng)
+            
+            for listing in all_published_listings:
+                listing_data = ListingSerializer(listing, context={'request': request}).data
+                if listing.latitude is not None and listing.longitude is not None:
+                    try:
+                        listing_coords = (float(listing.latitude), float(listing.longitude))
+                        dist_km = geodesic(user_coords, listing_coords).km
+                        listing_data['distance_km'] = round(dist_km, 2)
+                    except Exception:
+                        listing_data['distance_km'] = None
+                else:
+                    listing_data['distance_km'] = None
+                nearest_properties_data.append(listing_data)
+
+            nearest_properties_data.sort(key=lambda x: (x.get('distance_km') is None, x.get('distance_km', float('inf'))))
+            top_10_nearest = nearest_properties_data[:10]
+        else:
+            # Fallback if no user coordinates available
+            latest_listings = all_published_listings.order_by('-created_at')[:10]
+            top_10_nearest = []
+            for listing in latest_listings:
+                listing_data = ListingSerializer(listing, context={'request': request}).data
+                listing_data['distance_km'] = None
+                top_10_nearest.append(listing_data)
+
+        # 3. Top 6 Selling / Active Agents
+        top_agents_qs = User.objects.filter(role='agent')\
+            .annotate(active_count=Count('listings', filter=Q(listings__is_published=True, listings__status='active')))\
+            .order_by('-active_count', '-agent_profile__rating', '-date_joined')[:6]
+
+        top_agents_data = AgentDetailSerializer(top_agents_qs, many=True, context={'request': request}).data
+
+        # 4. Top Locations (Highest property density)
+        raw_locations = Listing.objects.filter(is_published=True, status='active')\
+            .values('address')\
+            .annotate(listings_count=Count('id'), avg_price=Avg('price'))\
+            .order_by('-listings_count')[:10]
+
+        top_locations_data = []
+        for item in raw_locations:
+            addr = item['address']
+            sample_listing = Listing.objects.filter(address=addr, is_published=True).first()
+            cover_photo = None
+            if sample_listing:
+                sample_serialized = ListingSerializer(sample_listing, context={'request': request}).data
+                cover_photo = sample_serialized.get('cover_photo')
+
+            top_locations_data.append({
+                "location": addr,
+                "listings_count": item['listings_count'],
+                "cover_photo": cover_photo,
+                "avg_price": round(float(item['avg_price']), 2) if item['avg_price'] else 0.00
+            })
+
+        return Response({
+            "user_location": user_location_data,
+            "nearest_properties": top_10_nearest,
+            "top_agents": top_agents_data,
+            "top_locations": top_locations_data
+        }, status=status.HTTP_200_OK)

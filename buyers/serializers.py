@@ -11,18 +11,37 @@ class SavedListingSerializer(serializers.ModelSerializer):
     listing_id = serializers.PrimaryKeyRelatedField(
         queryset=Listing.objects.all(), 
         source='listing', 
-        write_only=True
+        write_only=True,
+        required=False
+    )
+    listing = serializers.PrimaryKeyRelatedField(
+        queryset=Listing.objects.all(), 
+        write_only=True,
+        required=False
     )
 
     class Meta:
         model = SavedListing
-        fields = ('id', 'buyer', 'listing_id', 'listing_details', 'created_at')
+        fields = ('id', 'buyer', 'listing', 'listing_id', 'listing_details', 'created_at')
         read_only_fields = ('id', 'buyer', 'created_at')
+
+    def to_internal_value(self, data):
+        # Support flexible JSON payload keys: listing_id, listing, or id
+        mutable_data = data.copy() if hasattr(data, 'copy') else dict(data)
+        target_id = mutable_data.get('listing_id') or mutable_data.get('listing') or mutable_data.get('id')
+        if target_id and 'listing' not in mutable_data:
+            mutable_data['listing'] = target_id
+        if target_id and 'listing_id' not in mutable_data:
+            mutable_data['listing_id'] = target_id
+        return super().to_internal_value(mutable_data)
 
     def validate(self, attrs):
         request = self.context.get('request')
         buyer = request.user
         listing = attrs.get('listing')
+
+        if not listing:
+            raise serializers.ValidationError({"listing_id": "This field is required."})
 
         if SavedListing.objects.filter(buyer=buyer, listing=listing).exists():
             raise serializers.ValidationError("You have already saved this property listing.")
@@ -69,3 +88,17 @@ class AgentDetailSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         listings = Listing.objects.filter(agent=obj, is_published=True).order_by('-created_at')
         return ListingSerializer(listings, many=True, context={'request': request}).data
+
+
+class TopLocationSerializer(serializers.Serializer):
+    location = serializers.CharField()
+    listings_count = serializers.IntegerField()
+    cover_photo = serializers.CharField(allow_null=True)
+    avg_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class BuyerDashboardSerializer(serializers.Serializer):
+    user_location = serializers.DictField()
+    nearest_properties = ListingSerializer(many=True)
+    top_agents = AgentDetailSerializer(many=True)
+    top_locations = TopLocationSerializer(many=True)

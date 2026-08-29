@@ -178,3 +178,20 @@ class BuyerAPITests(APITestCase):
         self.assertEqual(update_res.status_code, status.HTTP_200_OK)
         self.assertEqual(update_res.data['city'], "Lagos")
         self.assertIsNotNone(update_res.data['profile_picture'])
+
+    def test_buyer_dashboard_endpoint(self):
+        token = self.get_jwt_token("buyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # Update buyer location coordinates
+        profile_url = reverse('buyer-profile')
+        self.client.patch(profile_url, {"latitude": 6.5244, "longitude": 3.3792, "city": "Lagos"}, format='json')
+
+        dashboard_url = reverse('buyer-dashboard')
+        response = self.client.get(dashboard_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('user_location', response.data)
+        self.assertIn('nearest_properties', response.data)
+        self.assertIn('top_agents', response.data)
+        self.assertIn('top_locations', response.data)
+        self.assertIsNotNone(response.data['user_location']['latitude'])
