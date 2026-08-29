@@ -62,9 +62,8 @@ class UserRegisterSerializer(serializers.ModelSerializer):
                 recipient_list=[user.email],
                 fail_silently=False,
             )
-        except Exception:
-            # Silence email dispatch errors in dev environment
-            pass
+        except Exception as e:
+            print(f"[OTP Email Error] Failed to send verification email to {user.email}: {e}")
             
         return user
 
