@@ -1512,5 +1512,94 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
         return [IsAdminOrModeratorRole()]
 
 
+from profiles.models import AgentKYC
+from agents.serializers import AgentKYCSerializer
+
+class AdminAgentKYCListView(generics.ListAPIView):
+    permission_classes = [IsAdminOrModeratorRole]
+    serializer_class = AgentKYCSerializer
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        queryset = AgentKYC.objects.select_related('agent_profile__user').order_by('-updated_at')
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(agent_profile__user__email__icontains=search) |
+                Q(agent_profile__user__full_name__icontains=search) |
+                Q(nin_number__icontains=search) |
+                Q(cac_number__icontains=search)
+            )
+        return queryset
+
+    @swagger_auto_schema(
+        operation_description="List all agent KYC records for admin review.",
+        manual_parameters=[
+            openapi.Parameter('status', openapi.IN_QUERY, description="Filter by status ('unverified', 'pending', 'verified', 'failed')", type=openapi.TYPE_STRING),
+            openapi.Parameter('search', openapi.IN_QUERY, description="Search by email, name, NIN, or CAC", type=openapi.TYPE_STRING),
+        ],
+        responses={200: AgentKYCSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class AdminAgentKYCReviewView(generics.GenericAPIView):
+    permission_classes = [IsAdminOrModeratorRole]
+    serializer_class = AgentKYCSerializer
+
+    @swagger_auto_schema(
+        operation_description="Admin manual review and approval/rejection of an agent KYC record.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['action'],
+            properties={
+                'action': openapi.Schema(type=openapi.TYPE_STRING, enum=['approve', 'reject']),
+                'reason': openapi.Schema(type=openapi.TYPE_STRING, description="Optional rejection reason")
+            }
+        ),
+        responses={200: AgentKYCSerializer()}
+    )
+    def post(self, request, pk, *args, **kwargs):
+        try:
+            kyc = AgentKYC.objects.select_related('agent_profile').get(pk=pk)
+        except AgentKYC.DoesNotExist:
+            return Response({"error": "Agent KYC record not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        action = request.data.get('action')
+        reason = request.data.get('reason')
+
+        if action == 'approve':
+            kyc.status = 'verified'
+            kyc.nin_verified = True
+            kyc.failure_reason = None
+            kyc.verified_at = timezone.now()
+            kyc.save()
+            kyc.agent_profile.is_verified = True
+            kyc.agent_profile.save()
+            return Response({
+                "message": "Agent KYC has been approved successfully.",
+                "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
+            }, status=status.HTTP_200_OK)
+
+        elif action == 'reject':
+            kyc.status = 'failed'
+            kyc.failure_reason = reason or "KYC rejected by platform administrator."
+            kyc.save()
+            kyc.agent_profile.is_verified = False
+            kyc.agent_profile.save()
+            return Response({
+                "message": "Agent KYC has been rejected.",
+                "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
+            }, status=status.HTTP_200_OK)
+
+        else:
+            return Response({"error": "Invalid action. Must be 'approve' or 'reject'."}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
 
 

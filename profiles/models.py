@@ -78,6 +78,53 @@ class AgentProfile(models.Model):
     def __str__(self):
         return f"Agent Profile of {self.user.email}"
 
+    @property
+    def kyc_status(self):
+        if hasattr(self, 'kyc'):
+            return self.kyc.status
+        return 'unverified'
+
+
+class AgentKYC(models.Model):
+    STATUS_CHOICES = (
+        ('unverified', 'Unverified'),
+        ('pending', 'Pending Verification'),
+        ('verified', 'Verified'),
+        ('failed', 'Verification Failed'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    agent_profile = models.OneToOneField(AgentProfile, on_delete=models.CASCADE, related_name='kyc')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='unverified')
+    
+    # NIN Verification Details
+    nin_number = models.CharField(max_length=20, blank=True, null=True)
+    nin_verified = models.BooleanField(default=False)
+    nin_data = models.JSONField(default=dict, blank=True)
+    
+    # CAC Verification Details
+    cac_number = models.CharField(max_length=50, blank=True, null=True)
+    cac_company_type = models.CharField(max_length=20, blank=True, null=True)  # 'co' or 'bn'
+    cac_verified = models.BooleanField(default=False)
+    cac_data = models.JSONField(default=dict, blank=True)
+    
+    # Audit & Retry Metadata
+    attempts_count = models.PositiveIntegerField(default=0)
+    failure_reason = models.TextField(blank=True, null=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    verified_at = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Agent KYC"
+        verbose_name_plural = "Agent KYCs"
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"KYC ({self.status}) for {self.agent_profile.user.email}"
+
 
 class AdminProfile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -101,7 +148,8 @@ def create_user_profile(sender, instance, created, **kwargs):
         if instance.role == 'buyer':
             BuyerProfile.objects.get_or_create(user=instance)
         elif instance.role == 'agent':
-            AgentProfile.objects.get_or_create(user=instance)
+            agent_prof, _ = AgentProfile.objects.get_or_create(user=instance)
+            AgentKYC.objects.get_or_create(agent_profile=agent_prof)
         elif instance.role in ['admin', 'moderator']:
             AdminProfile.objects.get_or_create(user=instance)
 

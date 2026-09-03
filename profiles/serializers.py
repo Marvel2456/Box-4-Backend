@@ -49,15 +49,17 @@ class BuyerProfileSerializer(BaseProfileSerializer):
 
 class AgentProfileSerializer(BaseProfileSerializer):
     profile_picture = FlexibleImageField(required=False, allow_null=True)
+    kyc_status = serializers.CharField(read_only=True)
+    is_verified = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = AgentProfile
         fields = (
             'id', 'user', 'full_name', 'phone_number', 'profile_picture',
             'latitude', 'longitude', 'city', 'state', 'country', 'bio',
-            'agency_name', 'license_number', 'rating'
+            'agency_name', 'license_number', 'rating', 'kyc_status', 'is_verified'
         )
-        read_only_fields = ('id', 'rating')
+        read_only_fields = ('id', 'rating', 'kyc_status', 'is_verified')
 
     def update(self, instance, validated_data):
         validated_data = self.update_user_names(instance, validated_data)

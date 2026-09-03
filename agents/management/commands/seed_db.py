@@ -84,7 +84,14 @@ class Command(BaseCommand):
             agent_user.agent_profile.plan = created_plans[2]  # Gold Plan
             agent_user.agent_profile.rating = 4.9
             agent_user.agent_profile.agency_name = "Apex Realty International"
+            agent_user.agent_profile.is_verified = True
             agent_user.agent_profile.save()
+
+            from profiles.models import AgentKYC
+            kyc, _ = AgentKYC.objects.get_or_create(agent_profile=agent_user.agent_profile)
+            kyc.status = 'verified'
+            kyc.nin_verified = True
+            kyc.save()
 
         # 3. Seed Property Listings
         sample_properties = [

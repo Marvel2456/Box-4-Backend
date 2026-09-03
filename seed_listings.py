@@ -7,7 +7,7 @@ django.setup()
 
 from django.contrib.auth import get_user_model
 from agents.models import Category, Listing, ListingImage
-from profiles.models import AgentProfile, Plan
+from profiles.models import AgentProfile, Plan, AgentKYC
 
 User = get_user_model()
 
@@ -71,7 +71,16 @@ def seed_data():
         profile.rating = data["rating"]
         profile.phone_number = data["phone"]
         profile.bio = f"Experienced property specialist with {data['agency']}. Providing premium real estate solutions."
+        profile.is_verified = True
         profile.save()
+
+        kyc, _ = AgentKYC.objects.get_or_create(agent_profile=profile)
+        kyc.status = 'verified'
+        kyc.nin_number = "12345678901"
+        kyc.nin_verified = True
+        kyc.cac_number = f"RC{random.randint(100000, 999999)}"
+        kyc.cac_verified = True
+        kyc.save()
 
         agent_users.append(user)
     print(f"✅ Created/verified {len(agent_users)} top agent profiles.")

@@ -10,9 +10,13 @@ from .views import (
     AgentMyListingsView,
     AgentProfileDetailView,
     CategoryListView,
+    AgentKYCVerifyView,
+    AgentKYCStatusView,
 )
 
 urlpatterns = [
+    path('kyc/verify/', AgentKYCVerifyView.as_view(), name='agent-kyc-verify'),
+    path('kyc/status/', AgentKYCStatusView.as_view(), name='agent-kyc-status'),
     path('categories/', CategoryListView.as_view(), name='agent-categories'),
     path('profile/', AgentProfileDetailView.as_view(), name='agent-profile'),
     path('dashboard/', AgentDashboardView.as_view(), name='agent-dashboard'),

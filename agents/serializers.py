@@ -107,6 +107,12 @@ class ListingSerializer(serializers.ModelSerializer):
             if not plan:
                 raise serializers.ValidationError("You do not have an active subscription plan. Please subscribe to list properties.")
 
+            # Enforce KYC verification
+            if not hasattr(profile, 'kyc') or profile.kyc.status != 'verified':
+                raise serializers.ValidationError(
+                    "Your account KYC is not verified. Please complete your NIN and CAC identity verification to list properties."
+                )
+
             # Enforce total listing limits (0 means unlimited)
             if plan.max_listings > 0:
                 current_count = Listing.objects.filter(agent=user).count()
@@ -264,3 +270,32 @@ class AgentDashboardResponseSerializer(serializers.Serializer):
     agent = serializers.DictField()
     metrics = AgentDashboardMetricsSerializer()
     active_listings = ListingSerializer(many=True)
+
+
+class AgentKYCSubmitSerializer(serializers.Serializer):
+    nin_number = serializers.CharField(max_length=11, min_length=11, help_text="11-digit National Identity Number (NIN).")
+    cac_number = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True, help_text="Optional CAC registration number (e.g. RC1234567 or BN7654321).")
+    cac_company_type = serializers.ChoiceField(choices=[('co', 'Company (RC)'), ('bn', 'Business Name (BN)'), ('it', 'Incorporated Trustees')], default='co', required=False)
+    agency_name = serializers.CharField(max_length=150, required=False, allow_blank=True, allow_null=True)
+
+    def validate_nin_number(self, value):
+        val = str(value).strip()
+        if not val.isdigit() or len(val) != 11:
+            raise serializers.ValidationError("NIN must be an 11-digit number.")
+        return val
+
+
+class AgentKYCSerializer(serializers.ModelSerializer):
+    agent_email = serializers.CharField(source='agent_profile.user.email', read_only=True)
+    agent_name = serializers.CharField(source='agent_profile.user.full_name', read_only=True)
+
+    class Meta:
+        from profiles.models import AgentKYC
+        model = AgentKYC
+        fields = (
+            'id', 'agent_email', 'agent_name', 'status', 'nin_number', 'nin_verified', 'cac_number',
+            'cac_company_type', 'cac_verified', 'attempts_count',
+            'failure_reason', 'submitted_at', 'verified_at', 'created_at', 'updated_at'
+        )
+        read_only_fields = fields
+

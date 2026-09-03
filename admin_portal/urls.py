@@ -37,10 +37,16 @@ from .views import (
     AdminFeatureDetailView,
     AdminSendFeatureReminderView,
     AdminCategoryListCreateView,
-    AdminCategoryDetailView
+    AdminCategoryDetailView,
+    AdminAgentKYCListView,
+    AdminAgentKYCReviewView,
 )
 
 urlpatterns = [
+    # Admin KYC Management
+    path('kyc/agents/', AdminAgentKYCListView.as_view(), name='admin-kyc-agents-list'),
+    path('kyc/agents/<uuid:pk>/review/', AdminAgentKYCReviewView.as_view(), name='admin-kyc-agent-review'),
+
     # Admin Auth
     path('auth/register/', AdminRegisterView.as_view(), name='admin-auth-register'),
     path('auth/login/', AdminLoginView.as_view(), name='admin-auth-login'),

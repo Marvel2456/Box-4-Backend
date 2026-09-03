@@ -13,10 +13,13 @@ from .serializers import (
     ListingImageUploadSerializer, 
     ListingImageSerializer,
     AgentDashboardResponseSerializer,
-    CategorySerializer
+    CategorySerializer,
+    AgentKYCSubmitSerializer,
+    AgentKYCSerializer
 )
-from profiles.models import AgentProfile
+from profiles.models import AgentProfile, AgentKYC
 from profiles.serializers import AgentProfileSerializer
+from core.prembly import PremblyService
 
 class IsAgentOwnerOrReadOnly(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -444,3 +447,119 @@ class CategoryListView(generics.ListAPIView):
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
+
+
+class AgentKYCVerifyView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = AgentKYCSubmitSerializer
+
+    @swagger_auto_schema(
+        operation_description="Submit NIN and optional CAC registration details for automated Prembly identity verification.",
+        responses={
+            200: openapi.Response(description="KYC Verified Successfully", schema=AgentKYCSerializer()),
+            400: "Verification Failed"
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        if user.role != 'agent':
+            return Response({"error": "Only agent accounts can perform agent KYC verification."}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        nin_number = serializer.validated_data['nin_number']
+        cac_number = serializer.validated_data.get('cac_number')
+        cac_company_type = serializer.validated_data.get('cac_company_type', 'co')
+        agency_name = serializer.validated_data.get('agency_name')
+
+        profile, _ = AgentProfile.objects.get_or_create(user=user)
+        kyc, _ = AgentKYC.objects.get_or_create(agent_profile=profile)
+
+        prembly = PremblyService()
+        kyc.submitted_at = timezone.now()
+        kyc.attempts_count += 1
+
+        # 1. Verify NIN
+        first_name = user.full_name.split()[0] if user.full_name else None
+        last_name = user.full_name.split()[-1] if user.full_name and len(user.full_name.split()) > 1 else None
+        nin_result = prembly.verify_nin(nin_number, first_name=first_name, last_name=last_name)
+
+        if not nin_result.get('verified'):
+            failure_msg = f"NIN Verification Failed: {nin_result.get('message')}"
+            kyc.status = 'failed'
+            kyc.nin_verified = False
+            kyc.nin_number = nin_number
+            kyc.nin_data = nin_result.get('data') or {}
+            kyc.failure_reason = failure_msg
+            kyc.save()
+            profile.is_verified = False
+            profile.save()
+            return Response({
+                "error": failure_msg,
+                "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        kyc.nin_number = nin_number
+        kyc.nin_verified = True
+        kyc.nin_data = nin_result.get('data') or {}
+
+        # 2. Verify CAC if provided
+        if cac_number:
+            cac_result = prembly.verify_cac(cac_number, company_type=cac_company_type, company_name=agency_name or profile.agency_name)
+            if not cac_result.get('verified'):
+                failure_msg = f"CAC Verification Failed: {cac_result.get('message')}"
+                kyc.status = 'failed'
+                kyc.cac_verified = False
+                kyc.cac_number = cac_number
+                kyc.cac_company_type = cac_company_type
+                kyc.cac_data = cac_result.get('data') or {}
+                kyc.failure_reason = failure_msg
+                kyc.save()
+                profile.is_verified = False
+                profile.save()
+                return Response({
+                    "error": failure_msg,
+                    "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            kyc.cac_number = cac_number
+            kyc.cac_company_type = cac_company_type
+            kyc.cac_verified = True
+            kyc.cac_data = cac_result.get('data') or {}
+            if agency_name:
+                profile.agency_name = agency_name
+
+        # All verifications succeeded
+        kyc.status = 'verified'
+        kyc.failure_reason = None
+        kyc.verified_at = timezone.now()
+        kyc.save()
+
+        profile.is_verified = True
+        profile.save()
+
+        return Response({
+            "message": "KYC identity verification completed successfully!",
+            "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
+        }, status=status.HTTP_200_OK)
+
+
+class AgentKYCStatusView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = AgentKYCSerializer
+
+    @swagger_auto_schema(
+        operation_description="Get the current agent's KYC verification status.",
+        responses={200: AgentKYCSerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        if user.role != 'agent':
+            return Response({"error": "Only agent accounts have agent KYC status."}, status=status.HTTP_403_FORBIDDEN)
+
+        profile, _ = AgentProfile.objects.get_or_create(user=user)
+        kyc, _ = AgentKYC.objects.get_or_create(agent_profile=profile)
+
+        return Response(AgentKYCSerializer(kyc, context={'request': request}).data, status=status.HTTP_200_OK)
+

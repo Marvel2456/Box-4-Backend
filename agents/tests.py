@@ -31,10 +31,16 @@ class ListingAPITests(APITestCase):
         self.agent_user.is_email_verified = True
         self.agent_user.save()
         
-        # Subscribe agent to plan
+        # Subscribe agent to plan and verify KYC for existing tests
+        from profiles.models import AgentKYC
         self.agent_profile = self.agent_user.agent_profile
         self.agent_profile.plan = self.silver_plan
+        self.agent_profile.is_verified = True
         self.agent_profile.save()
+        self.agent_kyc, _ = AgentKYC.objects.get_or_create(agent_profile=self.agent_profile)
+        self.agent_kyc.status = 'verified'
+        self.agent_kyc.nin_verified = True
+        self.agent_kyc.save()
 
         self.other_agent = User.objects.create_user(
             email="agent2@example.com",
@@ -46,7 +52,12 @@ class ListingAPITests(APITestCase):
         self.other_agent.is_email_verified = True
         self.other_agent.save()
         self.other_agent.agent_profile.plan = self.silver_plan
+        self.other_agent.agent_profile.is_verified = True
         self.other_agent.agent_profile.save()
+        other_kyc, _ = AgentKYC.objects.get_or_create(agent_profile=self.other_agent.agent_profile)
+        other_kyc.status = 'verified'
+        other_kyc.nin_verified = True
+        other_kyc.save()
 
         self.buyer_user = User.objects.create_user(
             email="buyer1@example.com",
@@ -379,5 +390,119 @@ class ListingAPITests(APITestCase):
         update_res = self.client.patch(profile_url, {"agency_name": "Lagos Realty", "bio": "Top property agent."})
         self.assertEqual(update_res.status_code, status.HTTP_200_OK)
         self.assertEqual(update_res.data['agency_name'], "Lagos Realty")
+
+    def test_unverified_agent_blocked_from_creating_listing(self):
+        # Create unverified agent
+        unverified_agent = User.objects.create_user(
+            email="unverified@example.com",
+            username="unverified@example.com",
+            password="securepassword123",
+            full_name="Unverified Agent",
+            role="agent",
+            is_email_verified=True
+        )
+        unverified_agent.agent_profile.plan = self.silver_plan
+        unverified_agent.agent_profile.is_verified = False
+        unverified_agent.agent_profile.save()
+        
+        from profiles.models import AgentKYC
+        kyc, _ = AgentKYC.objects.get_or_create(agent_profile=unverified_agent.agent_profile)
+        kyc.status = 'unverified'
+        kyc.save()
+
+        token = self.get_jwt_token("unverified@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        payload = {
+            "title": "Blocked Listing",
+            "category": "apartment",
+            "price": "5000000.00",
+            "address": "Victoria Island, Lagos",
+            "latitude": 6.42,
+            "longitude": 3.42,
+            "bedrooms": 2,
+            "bathrooms": 2,
+        }
+        res = self.client.post(self.list_url, payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("KYC is not verified", str(res.data))
+
+    def test_agent_kyc_verification_flow_and_status(self):
+        # 1. Unverified agent submits valid NIN and CAC
+        agent = User.objects.create_user(
+            email="kycagent@example.com",
+            username="kycagent@example.com",
+            password="securepassword123",
+            full_name="KYC Test Agent",
+            role="agent",
+            is_email_verified=True
+        )
+        agent.agent_profile.plan = self.silver_plan
+        agent.agent_profile.save()
+
+        token = self.get_jwt_token("kycagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # Initial KYC status should be unverified
+        status_url = reverse('agent-kyc-status')
+        res = self.client.get(status_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'unverified')
+
+        # Submit verification with invalid NIN length
+        verify_url = reverse('agent-kyc-verify')
+        bad_res = self.client.post(verify_url, {"nin_number": "12345"})
+        self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Submit verification with valid 11-digit NIN and CAC
+        good_res = self.client.post(verify_url, {
+            "nin_number": "12345678901",
+            "cac_number": "RC1234567",
+            "cac_company_type": "co",
+            "agency_name": "Verified Properties Ltd"
+        })
+        self.assertEqual(good_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(good_res.data['kyc']['status'], 'verified')
+        self.assertTrue(good_res.data['kyc']['nin_verified'])
+        self.assertTrue(good_res.data['kyc']['cac_verified'])
+
+        # Now check agent status endpoint returns verified
+        status_res = self.client.get(status_url)
+        self.assertEqual(status_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_res.data['status'], 'verified')
+
+    def test_admin_agent_kyc_management(self):
+        # Create admin user
+        admin_user = User.objects.create_user(
+            email="admin_kyc@example.com",
+            username="admin_kyc@example.com",
+            password="securepassword123",
+            full_name="Admin User",
+            role="admin",
+            is_email_verified=True
+        )
+        admin_token = self.get_jwt_token("admin_kyc@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_token}')
+
+        # 1. Admin lists all KYC records
+        list_url = reverse('admin-kyc-agents-list')
+        list_res = self.client.get(list_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+
+        # 2. Admin reviews and rejects an agent's KYC
+        from profiles.models import AgentKYC
+        kyc = AgentKYC.objects.first()
+        review_url = reverse('admin-kyc-agent-review', kwargs={'pk': kyc.id})
+
+        reject_res = self.client.post(review_url, {"action": "reject", "reason": "Name on NIN does not match photo"})
+        self.assertEqual(reject_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(reject_res.data['kyc']['status'], 'failed')
+        self.assertEqual(reject_res.data['kyc']['failure_reason'], "Name on NIN does not match photo")
+
+        # 3. Admin reviews and approves the agent's KYC
+        approve_res = self.client.post(review_url, {"action": "approve"})
+        self.assertEqual(approve_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(approve_res.data['kyc']['status'], 'verified')
+
 
 
