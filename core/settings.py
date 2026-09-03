@@ -260,6 +260,7 @@ SWAGGER_SETTINGS = {
 
 # Prembly (Identitypass) KYC Configuration
 PREMBLY_SECRET_KEY = os.getenv('PREMBLY_SECRET_KEY')
+PREMBLY_PUBLIC_KEY = os.getenv('PREMBLY_PUBLIC_KEY')
 PREMBLY_APP_ID = os.getenv('PREMBLY_APP_ID')
 PREMBLY_ENVIRONMENT = os.getenv('PREMBLY_ENVIRONMENT', 'sandbox')
 

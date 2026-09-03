@@ -12,26 +12,31 @@ class PremblyService:
     """
     BASE_URL = "https://api.prembly.com"
 
-    def __init__(self, secret_key=None, app_id=None, environment=None):
+    def __init__(self, secret_key=None, app_id=None, public_key=None, environment=None):
         self.secret_key = secret_key or getattr(settings, 'PREMBLY_SECRET_KEY', None) or os.getenv('PREMBLY_SECRET_KEY')
-        self.app_id = app_id or getattr(settings, 'PREMBLY_APP_ID', None) or os.getenv('PREMBLY_APP_ID')
+        self.public_key = public_key or getattr(settings, 'PREMBLY_PUBLIC_KEY', None) or os.getenv('PREMBLY_PUBLIC_KEY')
+        self.app_id = app_id or getattr(settings, 'PREMBLY_APP_ID', None) or os.getenv('PREMBLY_APP_ID') or self.public_key
         self.environment = (environment or getattr(settings, 'PREMBLY_ENVIRONMENT', 'sandbox') or os.getenv('PREMBLY_ENVIRONMENT', 'sandbox')).lower()
         self.base_url = self.BASE_URL
 
     def _is_mock_mode(self):
-        if not self.secret_key or str(self.secret_key).strip() == "" or str(self.secret_key) == "PREMBLY_SECRET_KEY":
+        # Only mock if no key or dummy template placeholder is provided
+        if not self.secret_key or str(self.secret_key).strip() in ["", "PREMBLY_SECRET_KEY", "your_prembly_secret_key_here"]:
             return True
-        if any(placeholder in str(self.secret_key).lower() for placeholder in ['your_', 'test_', 'mock', 'placeholder', 'dummy', 'prembly_secret_key']):
+        if any(placeholder in str(self.secret_key).lower() for placeholder in ['your_secret', 'mock_key', 'dummy_key']):
             return True
         return False
 
     def _get_headers(self):
-        return {
+        headers = {
             "x-api-key": self.secret_key or "",
-            "app-id": self.app_id or "",
+            "app-id": self.app_id or self.public_key or "",
             "Content-Type": "application/json",
             "Accept": "application/json"
         }
+        if self.public_key:
+            headers["public-key"] = self.public_key
+        return headers
 
     def verify_nin(self, nin_number, first_name=None, last_name=None, dob=None):
         """
@@ -47,7 +52,6 @@ class PremblyService:
                 "data": None
             }
 
-        # Mock fallback for development/sandbox if live credentials are not set
         if self._is_mock_mode():
             logger.info(f"[Prembly Mock] Simulating NIN verification for {nin_clean}")
             return {
@@ -67,6 +71,7 @@ class PremblyService:
 
         url = f"{self.base_url}/identitypass/verification/nin"
         payload = {
+            "number_nin": nin_clean,
             "number": nin_clean,
             "nin": nin_clean
         }
@@ -77,8 +82,11 @@ class PremblyService:
             response = requests.post(url, json=payload, headers=self._get_headers(), timeout=20)
             res_data = response.json() if response.content else {}
 
+            verification_status = res_data.get('verification', {}).get('status', '').upper()
             is_success = response.status_code in [200, 201] and (
-                res_data.get('status') is True or res_data.get('response_code') in ['00', '01', 200]
+                res_data.get('status') is True or 
+                res_data.get('response_code') in ['00', '01', 200] or
+                verification_status == 'VERIFIED'
             )
 
             if is_success:
@@ -90,11 +98,11 @@ class PremblyService:
                     "data": inner_data
                 }
             else:
-                error_msg = res_data.get('detail') or res_data.get('message') or "NIN verification failed on Prembly."
+                error_msg = res_data.get('detail') or res_data.get('message') or res_data.get('errors') or "NIN verification failed on Prembly."
                 return {
                     "status": False,
                     "verified": False,
-                    "message": error_msg,
+                    "message": str(error_msg),
                     "data": res_data
                 }
         except requests.exceptions.RequestException as e:
@@ -106,14 +114,27 @@ class PremblyService:
                 "data": None
             }
 
-    def verify_cac(self, cac_number, company_type='co', company_name=None):
+    def verify_cac(self, cac_number, company_type='RC', company_name=None):
         """
         Verify an agent's Corporate Affairs Commission (CAC) business/company registration.
         Endpoint: /identitypass/verification/cac
-        company_type: 'co' (RC Company) or 'bn' (Business Name) or 'it' (Incorporated Trustees)
+        company_type: 'RC' (Company) or 'BN' (Business Name) or 'IT' (Incorporated Trustees)
         """
-        cac_clean = str(cac_number).strip()
-        comp_type_clean = str(company_type).strip().lower()
+        cac_clean = str(cac_number).strip().upper()
+        if cac_clean.startswith('RC'):
+            cac_clean = cac_clean.replace('RC', '').strip()
+        elif cac_clean.startswith('BN'):
+            cac_clean = cac_clean.replace('BN', '').strip()
+
+        raw_type = str(company_type).strip().lower()
+        if raw_type in ['co', 'rc', 'company']:
+            comp_type_clean = 'RC'
+        elif raw_type in ['bn', 'business_name', 'business name']:
+            comp_type_clean = 'BN'
+        elif raw_type in ['it', 'trustees']:
+            comp_type_clean = 'IT'
+        else:
+            comp_type_clean = 'RC'
 
         if not cac_clean:
             return {
@@ -123,7 +144,6 @@ class PremblyService:
                 "data": None
             }
 
-        # Mock fallback for development/sandbox if live credentials are not set
         if self._is_mock_mode():
             logger.info(f"[Prembly Mock] Simulating CAC verification for {cac_clean}")
             return {
@@ -152,8 +172,11 @@ class PremblyService:
             response = requests.post(url, json=payload, headers=self._get_headers(), timeout=20)
             res_data = response.json() if response.content else {}
 
+            verification_status = res_data.get('verification', {}).get('status', '').upper()
             is_success = response.status_code in [200, 201] and (
-                res_data.get('status') is True or res_data.get('response_code') in ['00', '01', 200]
+                res_data.get('status') is True or 
+                res_data.get('response_code') in ['00', '01', 200] or
+                verification_status == 'VERIFIED'
             )
 
             if is_success:
@@ -165,11 +188,11 @@ class PremblyService:
                     "data": inner_data
                 }
             else:
-                error_msg = res_data.get('detail') or res_data.get('message') or "CAC verification failed on Prembly."
+                error_msg = res_data.get('detail') or res_data.get('message') or res_data.get('errors') or "CAC verification failed on Prembly."
                 return {
                     "status": False,
                     "verified": False,
-                    "message": error_msg,
+                    "message": str(error_msg),
                     "data": res_data
                 }
         except requests.exceptions.RequestException as e:
