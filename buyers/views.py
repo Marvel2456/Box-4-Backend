@@ -7,6 +7,7 @@ import math
 from geopy.distance import geodesic
 
 from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from .models import SavedListing
 from .serializers import (
@@ -51,6 +52,27 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ListingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_description="Search and filter published property listings for mobile buyers.",
+        manual_parameters=[
+            openapi.Parameter('search', openapi.IN_QUERY, description="Global keyword search across title, category, tag, address, city, state", type=openapi.TYPE_STRING),
+            openapi.Parameter('q', openapi.IN_QUERY, description="Alias for search parameter", type=openapi.TYPE_STRING),
+            openapi.Parameter('category', openapi.IN_QUERY, description="Filter by Category name or UUID (e.g. 'Duplex')", type=openapi.TYPE_STRING),
+            openapi.Parameter('tag', openapi.IN_QUERY, description="Filter by Tag name or UUID, comma-separated (e.g. 'Luxury,Furnished')", type=openapi.TYPE_STRING),
+            openapi.Parameter('tags', openapi.IN_QUERY, description="Alias for tag filter", type=openapi.TYPE_STRING),
+            openapi.Parameter('city', openapi.IN_QUERY, description="Filter by city (e.g. 'Lekki', 'Yaba')", type=openapi.TYPE_STRING),
+            openapi.Parameter('state', openapi.IN_QUERY, description="Filter by state (e.g. 'Lagos', 'Abuja')", type=openapi.TYPE_STRING),
+            openapi.Parameter('country', openapi.IN_QUERY, description="Filter by country (default: 'Nigeria')", type=openapi.TYPE_STRING),
+            openapi.Parameter('min_price', openapi.IN_QUERY, description="Minimum price filter", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('max_price', openapi.IN_QUERY, description="Maximum price filter", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('bedrooms', openapi.IN_QUERY, description="Minimum number of bedrooms", type=openapi.TYPE_INTEGER),
+            openapi.Parameter('bathrooms', openapi.IN_QUERY, description="Minimum number of bathrooms", type=openapi.TYPE_INTEGER),
+            openapi.Parameter('latitude', openapi.IN_QUERY, description="Buyer GPS latitude for proximity distance calculation", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('longitude', openapi.IN_QUERY, description="Buyer GPS longitude for proximity distance calculation", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('radius_km', openapi.IN_QUERY, description="Maximum radius in kilometers (default: 10.0)", type=openapi.TYPE_NUMBER),
+        ],
+        responses={200: ListingSerializer(many=True)}
+    )
     def list(self, request, *args, **kwargs):
         import uuid
         queryset = self.get_queryset()

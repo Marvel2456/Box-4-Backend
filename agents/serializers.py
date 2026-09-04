@@ -36,6 +36,7 @@ class ListingSerializer(serializers.ModelSerializer):
     category_details = CategorySerializer(source='category', read_only=True)
     tag = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
     tags = TagSerializer(source='tag', many=True, read_only=True)
+    is_saved = serializers.SerializerMethodField()
     images = ListingImageSerializer(many=True, read_only=True)
     cover_photo = serializers.SerializerMethodField()
     inquiries_count = serializers.SerializerMethodField()
@@ -73,7 +74,7 @@ class ListingSerializer(serializers.ModelSerializer):
             'tag', 'tags', 'price', 'address', 'city', 'state', 'country',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
-            'is_featured', 'views_count', 'inquiries_count', 'cover_photo', 'cover_photo_url',
+            'is_featured', 'is_saved', 'views_count', 'inquiries_count', 'cover_photo', 'cover_photo_url',
             'images', 'image_urls', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
@@ -123,6 +124,13 @@ class ListingSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(cover.image.url)
             return cover.image.url
         return None
+
+    def get_is_saved(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user') and request.user.is_authenticated and getattr(request.user, 'role', None) == 'buyer':
+            from buyers.models import SavedListing
+            return SavedListing.objects.filter(buyer=request.user, listing=obj).exists()
+        return False
 
     def get_inquiries_count(self, obj):
         from chat.models import Message
