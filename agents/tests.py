@@ -545,5 +545,69 @@ class ListingAPITests(APITestCase):
         self.assertEqual(res.data['state'], "Lagos")
         self.assertEqual(len(res.data['tags']), 2)
 
+    def test_agent_properties_search_and_filtering(self):
+        from agents.models import Tag, Category
+        tag_pool, _ = Tag.objects.get_or_create(name="Pool")
+        tag_waterfront, _ = Tag.objects.get_or_create(name="Waterfront")
+        cat_duplex, _ = Category.objects.get_or_create(name="Duplex")
+
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        l1 = Listing.objects.create(
+            agent=self.agent_user,
+            title="Lekki Waterfront Villa",
+            category=cat_duplex,
+            price=50000000.00,
+            address="Admiralty Way, Lekki",
+            city="Lekki",
+            state="Lagos",
+            bedrooms=4,
+            bathrooms=4,
+            latitude=6.45,
+            longitude=3.50,
+            status="active"
+        )
+        l1.tag.add(tag_waterfront)
+
+        l2 = Listing.objects.create(
+            agent=self.agent_user,
+            title="Abuja Smart Duplex",
+            category=cat_duplex,
+            price=30000000.00,
+            address="Maitama, Abuja",
+            city="Maitama",
+            state="Abuja",
+            bedrooms=3,
+            bathrooms=3,
+            latitude=9.08,
+            longitude=7.49,
+            status="active"
+        )
+        l2.tag.add(tag_pool)
+
+        # 1. Search in ListingListCreateView by city
+        res = self.client.get(self.list_url, {'search': 'Lekki'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data['results'] if 'results' in res.data else res.data
+        self.assertTrue(any(r['title'] == "Lekki Waterfront Villa" for r in results))
+        self.assertFalse(any(r['title'] == "Abuja Smart Duplex" for r in results))
+
+        # 2. Filter in AgentMyListingsView by tag
+        my_listings_url = reverse('agent-my-listings')
+        res_tag = self.client.get(my_listings_url, {'tag': 'Waterfront'})
+        self.assertEqual(res_tag.status_code, status.HTTP_200_OK)
+        tag_results = res_tag.data['results'] if 'results' in res_tag.data else res_tag.data
+        self.assertEqual(len(tag_results), 1)
+        self.assertEqual(tag_results[0]['title'], "Lekki Waterfront Villa")
+
+        # 3. Filter by state
+        res_state = self.client.get(my_listings_url, {'state': 'Abuja'})
+        self.assertEqual(res_state.status_code, status.HTTP_200_OK)
+        state_results = res_state.data['results'] if 'results' in res_state.data else res_state.data
+        self.assertEqual(len(state_results), 1)
+        self.assertEqual(state_results[0]['title'], "Abuja Smart Duplex")
+
+
 
 

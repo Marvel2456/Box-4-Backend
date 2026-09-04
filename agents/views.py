@@ -36,66 +36,136 @@ class IsAgentOwnerOrReadOnly(permissions.BasePermission):
         return obj.agent == request.user
 
 
+def filter_listings_queryset(queryset, request):
+    import uuid
+    # 1. Tab Type Filter (All, Luxury, Residential, Commercial)
+    tab_type = request.query_params.get('type') or request.query_params.get('tab')
+    if tab_type:
+        tab_type = tab_type.lower()
+        if tab_type == 'luxury':
+            queryset = queryset.filter(Q(is_featured=True) | Q(category__name__in=['Villa', 'Duplex', 'Mansion']) | Q(price__gte=15000000))
+        elif tab_type == 'residential':
+            queryset = queryset.filter(category__name__in=['House', 'Apartment', 'Villa', 'Condo', 'Bungalow', 'Duplex', 'Single flat', 'Lodge', 'Airbnb'])
+        elif tab_type == 'commercial':
+            queryset = queryset.filter(category__name__in=['Mall', 'Shop', 'Plaza', 'Multi-story Building', 'Hotel', 'Land'])
+
+    # 2. Global Search Query
+    search = request.query_params.get('search') or request.query_params.get('q')
+    if search:
+        search = search.strip()
+        queryset = queryset.filter(
+            Q(title__icontains=search) |
+            Q(address__icontains=search) |
+            Q(city__icontains=search) |
+            Q(state__icontains=search) |
+            Q(category__name__icontains=search) |
+            Q(tag__name__icontains=search)
+        ).distinct()
+
+    # 3. Specific Filters
+    category = request.query_params.get('category')
+    if category:
+        try:
+            cat_uuid = uuid.UUID(category)
+            queryset = queryset.filter(category_id=cat_uuid)
+        except ValueError:
+            queryset = queryset.filter(category__name__iexact=category)
+
+    tag = request.query_params.get('tag') or request.query_params.get('tags')
+    if tag:
+        tag_items = [t.strip() for t in tag.split(',') if t.strip()]
+        tag_filters = Q()
+        for t in tag_items:
+            try:
+                t_uuid = uuid.UUID(t)
+                tag_filters |= Q(tag__id=t_uuid)
+            except ValueError:
+                tag_filters |= Q(tag__name__iexact=t)
+        queryset = queryset.filter(tag_filters).distinct()
+
+    city = request.query_params.get('city')
+    if city:
+        queryset = queryset.filter(Q(city__icontains=city) | Q(address__icontains=city))
+
+    state = request.query_params.get('state')
+    if state:
+        queryset = queryset.filter(Q(state__icontains=state) | Q(address__icontains=state))
+
+    country = request.query_params.get('country')
+    if country:
+        queryset = queryset.filter(Q(country__icontains=country) | Q(address__icontains=country))
+
+    status_param = request.query_params.get('status')
+    if status_param:
+        queryset = queryset.filter(status__iexact=status_param)
+
+    min_price = request.query_params.get('min_price')
+    if min_price:
+        queryset = queryset.filter(price__gte=min_price)
+
+    max_price = request.query_params.get('max_price')
+    if max_price:
+        queryset = queryset.filter(price__lte=max_price)
+
+    bedrooms = request.query_params.get('bedrooms')
+    if bedrooms:
+        queryset = queryset.filter(bedrooms__gte=bedrooms)
+
+    bathrooms = request.query_params.get('bathrooms')
+    if bathrooms:
+        queryset = queryset.filter(bathrooms__gte=bathrooms)
+
+    is_boosted = request.query_params.get('is_boosted')
+    if is_boosted is not None:
+        queryset = queryset.filter(is_boosted=(is_boosted.lower() in ['true', '1']))
+
+    is_featured = request.query_params.get('is_featured')
+    if is_featured is not None:
+        queryset = queryset.filter(is_featured=(is_featured.lower() in ['true', '1']))
+
+    is_published = request.query_params.get('is_published')
+    if is_published is not None:
+        queryset = queryset.filter(is_published=(is_published.lower() in ['true', '1']))
+
+    return queryset
+
+
+AGENT_LISTING_QUERY_PARAMS = [
+    openapi.Parameter('search', openapi.IN_QUERY, description="Global keyword search across title, description, address, city, state, category, and tags", type=openapi.TYPE_STRING),
+    openapi.Parameter('q', openapi.IN_QUERY, description="Alias for search parameter", type=openapi.TYPE_STRING),
+    openapi.Parameter('type', openapi.IN_QUERY, description="Filter by tab type (all, luxury, residential, commercial)", type=openapi.TYPE_STRING),
+    openapi.Parameter('tab', openapi.IN_QUERY, description="Alias for type parameter", type=openapi.TYPE_STRING),
+    openapi.Parameter('category', openapi.IN_QUERY, description="Filter by category name or UUID (e.g. 'Duplex')", type=openapi.TYPE_STRING),
+    openapi.Parameter('tag', openapi.IN_QUERY, description="Filter by tag name(s) or UUIDs, comma-separated (e.g. 'Luxury,Furnished')", type=openapi.TYPE_STRING),
+    openapi.Parameter('tags', openapi.IN_QUERY, description="Alias for tag filter", type=openapi.TYPE_STRING),
+    openapi.Parameter('city', openapi.IN_QUERY, description="Filter by city (e.g. 'Lekki')", type=openapi.TYPE_STRING),
+    openapi.Parameter('state', openapi.IN_QUERY, description="Filter by state (e.g. 'Lagos')", type=openapi.TYPE_STRING),
+    openapi.Parameter('status', openapi.IN_QUERY, description="Filter by status (active, pending, sold, rented)", type=openapi.TYPE_STRING),
+    openapi.Parameter('min_price', openapi.IN_QUERY, description="Minimum price filter", type=openapi.TYPE_NUMBER),
+    openapi.Parameter('max_price', openapi.IN_QUERY, description="Maximum price filter", type=openapi.TYPE_NUMBER),
+    openapi.Parameter('bedrooms', openapi.IN_QUERY, description="Minimum number of bedrooms", type=openapi.TYPE_INTEGER),
+    openapi.Parameter('bathrooms', openapi.IN_QUERY, description="Minimum number of bathrooms", type=openapi.TYPE_INTEGER),
+    openapi.Parameter('is_boosted', openapi.IN_QUERY, description="Filter boosted listings (true/false)", type=openapi.TYPE_BOOLEAN),
+    openapi.Parameter('is_featured', openapi.IN_QUERY, description="Filter featured listings (true/false)", type=openapi.TYPE_BOOLEAN),
+    openapi.Parameter('is_published', openapi.IN_QUERY, description="Filter published listings (true/false)", type=openapi.TYPE_BOOLEAN),
+]
+
+
 class ListingListCreateView(generics.ListCreateAPIView):
     serializer_class = ListingSerializer
     permission_classes = [IsAgentOwnerOrReadOnly]
 
     def get_queryset(self):
-        import uuid
         queryset = Listing.objects.all().select_related('category', 'agent').prefetch_related('tag', 'images').order_by('-created_at')
+        return filter_listings_queryset(queryset, self.request)
 
-        # Filter by Tab Type (All, Luxury, Residential, Commercial)
-        tab_type = self.request.query_params.get('type') or self.request.query_params.get('tab')
-        if tab_type:
-            tab_type = tab_type.lower()
-            if tab_type == 'luxury':
-                queryset = queryset.filter(Q(is_featured=True) | Q(category__name__in=['Villa', 'Duplex', 'Mansion']) | Q(price__gte=15000000))
-            elif tab_type == 'residential':
-                queryset = queryset.filter(category__name__in=['House', 'Apartment', 'Villa', 'Condo', 'Bungalow', 'Duplex', 'Single flat', 'Lodge', 'Airbnb'])
-            elif tab_type == 'commercial':
-                queryset = queryset.filter(category__name__in=['Mall', 'Shop', 'Plaza', 'Multi-story Building', 'Hotel', 'Land'])
-
-        category = self.request.query_params.get('category')
-        if category:
-            try:
-                cat_uuid = uuid.UUID(category)
-                queryset = queryset.filter(category_id=cat_uuid)
-            except ValueError:
-                queryset = queryset.filter(category__name__iexact=category)
-
-        tag = self.request.query_params.get('tag') or self.request.query_params.get('tags')
-        if tag:
-            tag_items = [t.strip() for t in tag.split(',') if t.strip()]
-            tag_filters = Q()
-            for t in tag_items:
-                try:
-                    t_uuid = uuid.UUID(t)
-                    tag_filters |= Q(tag__id=t_uuid)
-                except ValueError:
-                    tag_filters |= Q(tag__name__iexact=t)
-            queryset = queryset.filter(tag_filters).distinct()
-
-        city = self.request.query_params.get('city')
-        if city:
-            queryset = queryset.filter(Q(city__icontains=city) | Q(address__icontains=city))
-
-        state = self.request.query_params.get('state')
-        if state:
-            queryset = queryset.filter(Q(state__icontains=state) | Q(address__icontains=state))
-
-        search = self.request.query_params.get('search') or self.request.query_params.get('q')
-        if search:
-            search = search.strip()
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(address__icontains=search) |
-                Q(city__icontains=search) |
-                Q(state__icontains=search) |
-                Q(category__name__icontains=search) |
-                Q(tag__name__icontains=search)
-            ).distinct()
-
-        return queryset
+    @swagger_auto_schema(
+        operation_description="Search and filter all properties in the platform. Supports keyword search, category, tags, location (city/state), tab type, price range, bedrooms, and status.",
+        manual_parameters=AGENT_LISTING_QUERY_PARAMS,
+        responses={200: ListingSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
 
 class AgentDashboardView(generics.GenericAPIView):
@@ -182,32 +252,12 @@ class AgentMyListingsView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Listing.objects.filter(agent=user).order_by('-created_at')
-
-        # Filter by Tab Type (All, Luxury, Residential, Commercial)
-        tab_type = self.request.query_params.get('type') or self.request.query_params.get('tab')
-        if tab_type:
-            tab_type = tab_type.lower()
-            if tab_type == 'luxury':
-                queryset = queryset.filter(Q(is_featured=True) | Q(category__in=['villa', 'duplex', 'mansion']) | Q(price__gte=15000000))
-            elif tab_type == 'residential':
-                queryset = queryset.filter(category__in=['house', 'apartment', 'villa', 'condo', 'bungalow', 'duplex', 'single_flat', 'lodge', 'airbnb'])
-            elif tab_type == 'commercial':
-                queryset = queryset.filter(category__in=['mall', 'shop', 'plaza', 'multi_story_building', 'hotel', 'land'])
-
-        # Search filter
-        search = self.request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(address__icontains=search) |
-                Q(category__icontains=search)
-            )
-
-        return queryset
+        queryset = Listing.objects.filter(agent=user).select_related('category', 'agent').prefetch_related('tag', 'images').order_by('-created_at')
+        return filter_listings_queryset(queryset, self.request)
 
     @swagger_auto_schema(
-        operation_description="Get Agent My Listings management list (Screen 2). Supports tab filter (?type=all|luxury|residential|commercial) and search (?search=apartment).",
+        operation_description="Get and filter current Agent's My Listings management list. Supports tab filter (?type=all|luxury|residential|commercial), keyword search (?search=duplex), category, tags, location (city/state), status, price range, etc.",
+        manual_parameters=AGENT_LISTING_QUERY_PARAMS,
         responses={200: ListingSerializer(many=True)}
     )
     def get(self, request, *args, **kwargs):
