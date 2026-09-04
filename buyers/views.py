@@ -47,41 +47,77 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 
 class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Listing.objects.filter(is_published=True)
+    queryset = Listing.objects.filter(is_published=True).select_related('category', 'agent').prefetch_related('tag', 'images')
     serializer_class = ListingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def list(self, request, *args, **kwargs):
-        # 1. Apply basic query filters
+        import uuid
         queryset = self.get_queryset()
         
-        category = request.query_params.get('category')
-        city = request.query_params.get('city')
-        state = request.query_params.get('state')
-        country = request.query_params.get('country')
-        min_price = request.query_params.get('min_price')
-        max_price = request.query_params.get('max_price')
-        bedrooms = request.query_params.get('bedrooms')
-        bathrooms = request.query_params.get('bathrooms')
+        # 1. Global Keyword Search across title, category, tag, address, city, state
+        search_query = request.query_params.get('search') or request.query_params.get('q')
+        if search_query:
+            search_query = search_query.strip()
+            queryset = queryset.filter(
+                Q(title__icontains=search_query) |
+                Q(address__icontains=search_query) |
+                Q(city__icontains=search_query) |
+                Q(state__icontains=search_query) |
+                Q(category__name__icontains=search_query) |
+                Q(tag__name__icontains=search_query)
+            ).distinct()
 
+        # 2. Specific Multi-Filters
+        category = request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
+
+        tag = request.query_params.get('tag') or request.query_params.get('tags')
+        if tag:
+            tag_items = [t.strip() for t in tag.split(',') if t.strip()]
+            tag_filters = Q()
+            for t in tag_items:
+                try:
+                    t_uuid = uuid.UUID(t)
+                    tag_filters |= Q(tag__id=t_uuid)
+                except ValueError:
+                    tag_filters |= Q(tag__name__iexact=t)
+            queryset = queryset.filter(tag_filters).distinct()
+
+        city = request.query_params.get('city')
         if city:
-            queryset = queryset.filter(address__icontains=city)
+            queryset = queryset.filter(Q(city__icontains=city) | Q(address__icontains=city))
+
+        state = request.query_params.get('state')
         if state:
-            queryset = queryset.filter(address__icontains=state)
+            queryset = queryset.filter(Q(state__icontains=state) | Q(address__icontains=state))
+
+        country = request.query_params.get('country')
         if country:
-            queryset = queryset.filter(address__icontains=country)
+            queryset = queryset.filter(Q(country__icontains=country) | Q(address__icontains=country))
+
+        min_price = request.query_params.get('min_price')
         if min_price:
             queryset = queryset.filter(price__gte=min_price)
+
+        max_price = request.query_params.get('max_price')
         if max_price:
             queryset = queryset.filter(price__lte=max_price)
+
+        bedrooms = request.query_params.get('bedrooms')
         if bedrooms:
             queryset = queryset.filter(bedrooms__gte=bedrooms)
+
+        bathrooms = request.query_params.get('bathrooms')
         if bathrooms:
             queryset = queryset.filter(bathrooms__gte=bathrooms)
 
-        # 2. Geolocation proximity filtering
+        # 3. Geolocation proximity filtering
         lat_param = request.query_params.get('latitude')
         lon_param = request.query_params.get('longitude')
         radius_param = request.query_params.get('radius_km', 10.0)

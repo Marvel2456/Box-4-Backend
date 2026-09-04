@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Listing, ListingImage, Category
+from .models import Listing, ListingImage, Category, Tag
 from profiles.models import AgentProfile
 
 User = get_user_model()
@@ -10,6 +10,14 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = ('id', 'name', 'is_active', 'created_at', 'updated_at')
         read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ('id', 'name', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
 
 class ListingImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -23,6 +31,11 @@ class ListingImageUploadSerializer(serializers.Serializer):
 
 
 class ListingSerializer(serializers.ModelSerializer):
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    category_details = CategorySerializer(source='category', read_only=True)
+    tag = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
+    tags = TagSerializer(source='tag', many=True, read_only=True)
     images = ListingImageSerializer(many=True, read_only=True)
     cover_photo = serializers.SerializerMethodField()
     inquiries_count = serializers.SerializerMethodField()
@@ -56,13 +69,49 @@ class ListingSerializer(serializers.ModelSerializer):
     class Meta:
         model = Listing
         fields = (
-            'id', 'agent', 'agent_name', 'title', 'category', 'price', 'address',
+            'id', 'agent', 'agent_name', 'title', 'category', 'category_name', 'category_details',
+            'tag', 'tags', 'price', 'address', 'city', 'state', 'country',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
             'is_featured', 'views_count', 'inquiries_count', 'cover_photo', 'cover_photo_url',
             'images', 'image_urls', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            mutable_data = data.copy()
+            cat = mutable_data.get('category') or mutable_data.get('category_id')
+            if cat:
+                import uuid
+                if isinstance(cat, str):
+                    try:
+                        uuid.UUID(cat)
+                    except ValueError:
+                        category_obj = Category.objects.filter(name__iexact=cat).first()
+                        if not category_obj:
+                            category_obj = Category.objects.create(name=cat.capitalize())
+                        mutable_data['category'] = str(category_obj.id)
+
+            tags = mutable_data.get('tags') or mutable_data.get('tag_ids') or mutable_data.get('tag')
+            if tags and isinstance(tags, list):
+                import uuid
+                tag_uuids = []
+                for t in tags:
+                    if isinstance(t, str):
+                        try:
+                            uuid.UUID(t)
+                            tag_uuids.append(t)
+                        except ValueError:
+                            tag_obj = Tag.objects.filter(name__iexact=t).first()
+                            if tag_obj:
+                                tag_uuids.append(str(tag_obj.id))
+                    elif hasattr(t, 'id'):
+                        tag_uuids.append(str(t.id))
+                mutable_data['tag'] = tag_uuids
+
+            return super().to_internal_value(mutable_data)
+        return super().to_internal_value(data)
 
     def get_cover_photo(self, obj):
         cover = obj.images.filter(is_cover=True).first()
@@ -127,9 +176,13 @@ class ListingSerializer(serializers.ModelSerializer):
         image_urls = validated_data.pop('image_urls', [])
         image_ids = validated_data.pop('image_ids', [])
         uploaded_images = validated_data.pop('uploaded_images', [])
+        tags = validated_data.pop('tag', None)
 
         validated_data['agent'] = self.context['request'].user
         listing = Listing.objects.create(**validated_data)
+
+        if tags is not None:
+            listing.tag.set(tags)
 
         target_cover_path = self._clean_media_path(cover_photo_url) if cover_photo_url else None
         has_cover = False
@@ -192,8 +245,12 @@ class ListingSerializer(serializers.ModelSerializer):
         image_urls = validated_data.pop('image_urls', None)
         image_ids = validated_data.pop('image_ids', None)
         uploaded_images = validated_data.pop('uploaded_images', None)
+        tags = validated_data.pop('tag', None)
 
         listing = super().update(instance, validated_data)
+
+        if tags is not None:
+            listing.tag.set(tags)
 
         target_cover_path = self._clean_media_path(cover_photo_url) if cover_photo_url else None
         has_cover = instance.images.filter(is_cover=True).exists()

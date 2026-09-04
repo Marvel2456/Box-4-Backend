@@ -1,7 +1,7 @@
 # pyrefly: ignore [missing-import]
 from django.contrib import admin
 from unfold.admin import ModelAdmin, TabularInline
-from .models import Listing, ListingImage, Category
+from .models import Listing, ListingImage, Category, Tag
 
 class ListingImageInline(TabularInline):
     model = ListingImage
@@ -27,7 +27,13 @@ class CategoryAdmin(ModelAdmin):
     search_fields = ['name']
 
 
+class TagAdmin(ModelAdmin):
+    list_display = ['name', 'is_active', 'created_at', 'updated_at']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['name']
+
 admin.site.register(Listing, ListingAdmin)
 admin.site.register(ListingImage, ListingImageAdmin)
 admin.site.register(Category, CategoryAdmin)
+admin.site.register(Tag, TagAdmin)
 

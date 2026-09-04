@@ -16,24 +16,39 @@ class Category(models.Model):
     def __str__(self):
         return self.name
 
+
+class Tag(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['name']
+        verbose_name_plural = "Tags"
+
+    def __str__(self):
+        return self.name
+
 class Listing(models.Model):
-    CATEGORY_CHOICES = (
-        ('house', 'House'),
-        ('apartment', 'Apartment'),
-        ('lodge', 'Lodge'),
-        ('mall', 'Mall'),
-        ('hotel', 'Hotel'),
-        ('villa', 'Villa'),
-        ('condo', 'Condo'),
-        ('shop', 'Shop'),
-        ('land', 'Land'),
-        ('bungalow', 'Bungalow'),
-        ('plaza', 'Plaza'),
-        ('duplex', 'Duplex'),
-        ('multi_story_building', 'Multi-story Building'),
-        ('single_flat', 'Single flat'),
-        ('airbnb', 'Airbnb'),
-    )
+    # CATEGORY_CHOICES = (
+    #     ('house', 'House'),
+    #     ('apartment', 'Apartment'),
+    #     ('lodge', 'Lodge'),
+    #     ('mall', 'Mall'),
+    #     ('hotel', 'Hotel'),
+    #     ('villa', 'Villa'),
+    #     ('condo', 'Condo'),
+    #     ('shop', 'Shop'),
+    #     ('land', 'Land'),
+    #     ('bungalow', 'Bungalow'),
+    #     ('plaza', 'Plaza'),
+    #     ('duplex', 'Duplex'),
+    #     ('multi_story_building', 'Multi-story Building'),
+    #     ('single_flat', 'Single flat'),
+    #     ('airbnb', 'Airbnb'),
+    # )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     agent = models.ForeignKey(
@@ -43,11 +58,15 @@ class Listing(models.Model):
         limit_choices_to={'role': 'agent'}
     )
     title = models.CharField(max_length=255)
-    category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
+    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='listings')
+    tag = models.ManyToManyField(Tag, blank=True, related_name='listings')
     price = models.DecimalField(max_digits=12, decimal_places=2)
     
     # Location
     address = models.CharField(max_length=255)
+    city = models.CharField(max_length=250, blank=True, null=True, db_index=True)
+    state = models.CharField(max_length=250, blank=True, null=True, db_index=True)
+    country = models.CharField(max_length=250, default='Nigeria', blank=True, null=True)
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     

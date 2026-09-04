@@ -3,7 +3,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from agents.models import Listing
+from agents.models import Listing, Category, Tag
 from profiles.models import Plan, AgentProfile
 from .models import SavedListing
 
@@ -37,27 +37,40 @@ class BuyerAPITests(APITestCase):
         self.buyer_user.is_email_verified = True
         self.buyer_user.save()
 
-        # 3. Create properties at different geographic coordinates:
+        # 3. Create Categories and Tags
+        self.cat_duplex = Category.objects.create(name="Duplex")
+        self.cat_apartment = Category.objects.create(name="Apartment")
+        self.cat_villa = Category.objects.create(name="Villa")
+
+        self.tag_luxury = Tag.objects.create(name="Luxury")
+        self.tag_waterfront = Tag.objects.create(name="Waterfront")
+
+        # 4. Create properties at different geographic coordinates:
         # Listing A: Lekki (6.4281, 3.4219)
         self.listing_a = Listing.objects.create(
             agent=self.agent_user,
             title="Lekki Duplex",
-            category="duplex",
+            category=self.cat_duplex,
             price=25000000.00,
             address="Admiralty Way, Lekki",
+            city="Lekki",
+            state="Lagos",
             latitude=6.428100,
             longitude=3.421900,
             is_published=True,
             is_boosted=True
         )
+        self.listing_a.tag.add(self.tag_luxury, self.tag_waterfront)
 
         # Listing B: Yaba (6.5244, 3.3792) (~ 15 km away from Lekki)
         self.listing_b = Listing.objects.create(
             agent=self.agent_user,
             title="Yaba Apartment",
-            category="apartment",
+            category=self.cat_apartment,
             price=12000000.00,
             address="Herbert Macaulay Way, Yaba",
+            city="Yaba",
+            state="Lagos",
             latitude=6.524400,
             longitude=3.379200,
             is_published=True
@@ -67,13 +80,16 @@ class BuyerAPITests(APITestCase):
         self.listing_c = Listing.objects.create(
             agent=self.agent_user,
             title="Abuja Mansion",
-            category="villa",
+            category=self.cat_villa,
             price=80000000.00,
             address="Maitama, Abuja",
+            city="Maitama",
+            state="Abuja",
             latitude=9.076500,
             longitude=7.398600,
             is_published=True
         )
+        self.listing_c.tag.add(self.tag_luxury)
 
         # Endpoints
         self.search_url = reverse('buyer-properties-list')
@@ -84,6 +100,48 @@ class BuyerAPITests(APITestCase):
     def get_jwt_token(self, email, password):
         response = self.client.post(reverse('auth_login'), {"email": email, "password": password})
         return response.data['access']
+
+    def test_search_and_multi_filters(self):
+        token = self.get_jwt_token("buyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Search by Keyword across title/city/category/tag
+        res = self.client.get(self.search_url, {"search": "Lekki"})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data['results']), 1)
+        self.assertEqual(res.data['results'][0]['title'], "Lekki Duplex")
+
+        # Search by tag keyword
+        res_tag = self.client.get(self.search_url, {"search": "Luxury"})
+        self.assertEqual(res_tag.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_tag.data['results']), 2)
+
+        # 2. Filter by Category
+        res_cat = self.client.get(self.search_url, {"category": "Duplex"})
+        self.assertEqual(res_cat.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_cat.data['results']), 1)
+        self.assertEqual(res_cat.data['results'][0]['title'], "Lekki Duplex")
+
+        # 3. Filter by Tag
+        res_tag_filter = self.client.get(self.search_url, {"tag": "Waterfront"})
+        self.assertEqual(res_tag_filter.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_tag_filter.data['results']), 1)
+        self.assertEqual(res_tag_filter.data['results'][0]['title'], "Lekki Duplex")
+
+        # 4. Filter by State and City
+        res_loc = self.client.get(self.search_url, {"state": "Lagos", "city": "Yaba"})
+        self.assertEqual(res_loc.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_loc.data['results']), 1)
+        self.assertEqual(res_loc.data['results'][0]['title'], "Yaba Apartment")
+
+        # 5. Buyers Category & Tag list endpoints
+        cat_res = self.client.get(reverse('buyer-categories'))
+        self.assertEqual(cat_res.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(cat_res.data), 3)
+
+        tag_res = self.client.get(reverse('buyer-tags'))
+        self.assertEqual(tag_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(tag_res.data), 2)
 
     def test_geolocation_radius_filter(self):
         token = self.get_jwt_token("buyer@example.com", "securepassword123")

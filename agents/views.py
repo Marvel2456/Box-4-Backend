@@ -7,13 +7,14 @@ from datetime import timedelta
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .models import Listing, ListingImage, Category
+from .models import Listing, ListingImage, Category, Tag
 from .serializers import (
     ListingSerializer, 
     ListingImageUploadSerializer, 
     ListingImageSerializer,
     AgentDashboardResponseSerializer,
     CategorySerializer,
+    TagSerializer,
     AgentKYCSubmitSerializer,
     AgentKYCSerializer
 )
@@ -40,30 +41,59 @@ class ListingListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAgentOwnerOrReadOnly]
 
     def get_queryset(self):
-        queryset = Listing.objects.all().order_by('-created_at')
+        import uuid
+        queryset = Listing.objects.all().select_related('category', 'agent').prefetch_related('tag', 'images').order_by('-created_at')
 
         # Filter by Tab Type (All, Luxury, Residential, Commercial)
         tab_type = self.request.query_params.get('type') or self.request.query_params.get('tab')
         if tab_type:
             tab_type = tab_type.lower()
             if tab_type == 'luxury':
-                queryset = queryset.filter(Q(is_featured=True) | Q(category__in=['villa', 'duplex', 'mansion']) | Q(price__gte=15000000))
+                queryset = queryset.filter(Q(is_featured=True) | Q(category__name__in=['Villa', 'Duplex', 'Mansion']) | Q(price__gte=15000000))
             elif tab_type == 'residential':
-                queryset = queryset.filter(category__in=['house', 'apartment', 'villa', 'condo', 'bungalow', 'duplex', 'single_flat', 'lodge', 'airbnb'])
+                queryset = queryset.filter(category__name__in=['House', 'Apartment', 'Villa', 'Condo', 'Bungalow', 'Duplex', 'Single flat', 'Lodge', 'Airbnb'])
             elif tab_type == 'commercial':
-                queryset = queryset.filter(category__in=['mall', 'shop', 'plaza', 'multi_story_building', 'hotel', 'land'])
+                queryset = queryset.filter(category__name__in=['Mall', 'Shop', 'Plaza', 'Multi-story Building', 'Hotel', 'Land'])
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
 
-        search = self.request.query_params.get('search')
+        tag = self.request.query_params.get('tag') or self.request.query_params.get('tags')
+        if tag:
+            tag_items = [t.strip() for t in tag.split(',') if t.strip()]
+            tag_filters = Q()
+            for t in tag_items:
+                try:
+                    t_uuid = uuid.UUID(t)
+                    tag_filters |= Q(tag__id=t_uuid)
+                except ValueError:
+                    tag_filters |= Q(tag__name__iexact=t)
+            queryset = queryset.filter(tag_filters).distinct()
+
+        city = self.request.query_params.get('city')
+        if city:
+            queryset = queryset.filter(Q(city__icontains=city) | Q(address__icontains=city))
+
+        state = self.request.query_params.get('state')
+        if state:
+            queryset = queryset.filter(Q(state__icontains=state) | Q(address__icontains=state))
+
+        search = self.request.query_params.get('search') or self.request.query_params.get('q')
         if search:
+            search = search.strip()
             queryset = queryset.filter(
                 Q(title__icontains=search) |
                 Q(address__icontains=search) |
-                Q(category__icontains=search)
-            )
+                Q(city__icontains=search) |
+                Q(state__icontains=search) |
+                Q(category__name__icontains=search) |
+                Q(tag__name__icontains=search)
+            ).distinct()
 
         return queryset
 
@@ -444,6 +474,22 @@ class CategoryListView(generics.ListAPIView):
     @swagger_auto_schema(
         operation_description="Get list of active property categories for agents & buyers.",
         responses={200: CategorySerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class TagListView(generics.ListAPIView):
+    permission_classes = [permissions.AllowAny]
+    serializer_class = TagSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Tag.objects.filter(is_active=True).order_by('name')
+
+    @swagger_auto_schema(
+        operation_description="Get list of active property tags for agents & buyers to select from.",
+        responses={200: TagSerializer(many=True)}
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)

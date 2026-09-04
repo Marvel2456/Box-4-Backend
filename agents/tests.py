@@ -20,6 +20,11 @@ class ListingAPITests(APITestCase):
             max_featured=1
         )
         
+        from agents.models import Category
+        self.cat_house, _ = Category.objects.get_or_create(name="House")
+        self.cat_apartment, _ = Category.objects.get_or_create(name="Apartment")
+        self.cat_villa, _ = Category.objects.get_or_create(name="Villa")
+
         # 2. Create users
         self.agent_user = User.objects.create_user(
             email="agent1@example.com",
@@ -171,7 +176,7 @@ class ListingAPITests(APITestCase):
             Listing.objects.create(
                 agent=self.agent_user,
                 title=f"Listing {i}",
-                category="house",
+                category=self.cat_house,
                 price=5000000,
                 address="Address",
                 latitude=6.0,
@@ -181,7 +186,7 @@ class ListingAPITests(APITestCase):
         # Attempt to create the 4th listing (should be rejected)
         data = {
             "title": "Over Limit Listing",
-            "category": "house",
+            "category": str(self.cat_house.id),
             "price": "5000000.00",
             "address": "Address",
             "latitude": "6.000000",
@@ -196,7 +201,7 @@ class ListingAPITests(APITestCase):
         listing = Listing.objects.create(
             agent=self.agent_user,
             title="Old Title",
-            category="apartment",
+            category=self.cat_apartment,
             price=2000000,
             address="Address",
             latitude=6.0,
@@ -211,7 +216,7 @@ class ListingAPITests(APITestCase):
         patch_response = self.client.patch(detail_url, {"title": "New Title"})
         self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
         self.assertEqual(patch_response.data['title'], "New Title")
-        self.assertEqual(patch_response.data['category'], "apartment") # Unchanged
+        self.assertEqual(patch_response.data['category'], self.cat_apartment.id) # Unchanged
 
         # Test PUT (should also support partial updates in our viewset)
         put_response = self.client.put(detail_url, {"price": "2500000.00"})
@@ -223,7 +228,7 @@ class ListingAPITests(APITestCase):
         listing = Listing.objects.create(
             agent=self.agent_user,
             title="Agent One's Listing",
-            category="house",
+            category=self.cat_house,
             price=3000000,
             address="Address",
             latitude=6.0,
@@ -240,10 +245,10 @@ class ListingAPITests(APITestCase):
     def test_boost_listing_limit(self):
         # Create two listings for agent1
         listing1 = Listing.objects.create(
-            agent=self.agent_user, title="Listing 1", category="house", price=5000000, address="Addr", latitude=6.0, longitude=3.0
+            agent=self.agent_user, title="Listing 1", category=self.cat_house, price=5000000, address="Addr", latitude=6.0, longitude=3.0
         )
         listing2 = Listing.objects.create(
-            agent=self.agent_user, title="Listing 2", category="house", price=5000000, address="Addr", latitude=6.0, longitude=3.0
+            agent=self.agent_user, title="Listing 2", category=self.cat_house, price=5000000, address="Addr", latitude=6.0, longitude=3.0
         )
 
         token = self.get_jwt_token("agent1@example.com", "securepassword123")
@@ -275,10 +280,10 @@ class ListingAPITests(APITestCase):
     def test_feature_listing_limit(self):
         # Create two listings
         listing1 = Listing.objects.create(
-            agent=self.agent_user, title="Listing 1", category="house", price=5000000, address="Addr", latitude=6.0, longitude=3.0
+            agent=self.agent_user, title="Listing 1", category=self.cat_house, price=5000000, address="Addr", latitude=6.0, longitude=3.0
         )
         listing2 = Listing.objects.create(
-            agent=self.agent_user, title="Listing 2", category="house", price=5000000, address="Addr", latitude=6.0, longitude=3.0
+            agent=self.agent_user, title="Listing 2", category=self.cat_house, price=5000000, address="Addr", latitude=6.0, longitude=3.0
         )
 
         token = self.get_jwt_token("agent1@example.com", "securepassword123")
@@ -324,7 +329,7 @@ class ListingAPITests(APITestCase):
         # 2. Step 3: Agent creates the listing and links the pre-uploaded image IDs
         create_data = {
             "title": "Luxury Mansion",
-            "category": "villa",
+            "category": str(self.cat_villa.id),
             "price": "25000000.00",
             "address": "Victoria Island, Lagos",
             "latitude": "6.428100",
@@ -353,7 +358,7 @@ class ListingAPITests(APITestCase):
         Listing.objects.create(
             agent=self.agent_user,
             title="Luxury Apartment in Lekki",
-            category="apartment",
+            category=self.cat_apartment,
             price=10000000.00,
             address="Ikorodu street lagos",
             latitude=6.4,
@@ -503,6 +508,42 @@ class ListingAPITests(APITestCase):
         approve_res = self.client.post(review_url, {"action": "approve"})
         self.assertEqual(approve_res.status_code, status.HTTP_200_OK)
         self.assertEqual(approve_res.data['kyc']['status'], 'verified')
+
+    def test_tag_list_and_listing_creation_with_tags_and_location(self):
+        from agents.models import Tag
+        tag1 = Tag.objects.create(name="Modern")
+        tag2 = Tag.objects.create(name="Furnished")
+
+        # 1. List tags
+        tag_list_url = reverse('agent-tags')
+        tag_res = self.client.get(tag_list_url)
+        self.assertEqual(tag_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(tag_res.data), 2)
+
+        # 2. Agent creates listing with tags, city, and state
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        payload = {
+            "title": "Luxury Penthouse",
+            "category": "Apartment",
+            "price": "30000000.00",
+            "address": "Victoria Island, Lagos",
+            "city": "Victoria Island",
+            "state": "Lagos",
+            "country": "Nigeria",
+            "latitude": "6.428100",
+            "longitude": "3.421900",
+            "bedrooms": 3,
+            "bathrooms": 3,
+            "tag": [str(tag1.id), str(tag2.id)],
+            "facilities": ["Gym", "Elevator"]
+        }
+        res = self.client.post(self.list_url, payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['city'], "Victoria Island")
+        self.assertEqual(res.data['state'], "Lagos")
+        self.assertEqual(len(res.data['tags']), 2)
 
 
 

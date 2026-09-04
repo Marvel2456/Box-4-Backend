@@ -33,10 +33,13 @@ class NotificationAPITests(APITestCase):
         self.buyer_user.is_email_verified = True
         self.buyer_user.save()
 
+        from agents.models import Category
+        self.cat_house, _ = Category.objects.get_or_create(name="House")
+
         self.listing = Listing.objects.create(
             agent=self.agent_user,
             title="Notification Villa",
-            category="house",
+            category=self.cat_house,
             price=15000000.00,
             address="Lagos",
             latitude=6.524400,

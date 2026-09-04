@@ -38,6 +38,8 @@ from .views import (
     AdminSendFeatureReminderView,
     AdminCategoryListCreateView,
     AdminCategoryDetailView,
+    AdminTagListCreateView,
+    AdminTagDetailView,
     AdminAgentKYCListView,
     AdminAgentKYCReviewView,
 )
@@ -61,6 +63,10 @@ urlpatterns = [
     # Categories Management
     path('categories/', AdminCategoryListCreateView.as_view(), name='admin-categories-list'),
     path('categories/<uuid:pk>/', AdminCategoryDetailView.as_view(), name='admin-categories-detail'),
+
+    # Tags Management
+    path('tags/', AdminTagListCreateView.as_view(), name='admin-tags-list'),
+    path('tags/<uuid:pk>/', AdminTagDetailView.as_view(), name='admin-tags-detail'),
 
     # Property Listings Management
     path('properties/', AdminAllPropertiesListView.as_view(), name='admin-properties-all'),

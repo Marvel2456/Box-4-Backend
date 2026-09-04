@@ -42,8 +42,8 @@ from .serializers import (
     AdminSubscriptionDetailSerializer,
     AdminFeatureDetailSerializer
 )
-from agents.models import Listing, Report, Category
-from agents.serializers import CategorySerializer
+from agents.models import Listing, Report, Category, Tag
+from agents.serializers import CategorySerializer, TagSerializer
 from profiles.models import AgentProfile, Plan, AdminProfile, AgentSubscription, FeaturedPlan, ListingFeature
 from core.pagination import CustomPageNumberPagination
 
@@ -287,10 +287,10 @@ class OverviewDashboardView(generics.GenericAPIView):
             })
 
         # 3. Listings by Type Breakdown
-        category_counts = Listing.objects.values('category').annotate(count=Count('id'))
+        category_counts = Listing.objects.values('category__name').annotate(count=Count('id'))
         category_dict = {}
         for cat in category_counts:
-            display_name = dict(Listing.CATEGORY_CHOICES).get(cat['category'], cat['category'].capitalize())
+            display_name = cat.get('category__name') or 'Uncategorized'
             category_dict[display_name] = cat['count']
 
         # 4. Recent Listings Table Data
@@ -370,7 +370,12 @@ class AdminAllPropertiesListView(generics.GenericAPIView):
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            import uuid
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
 
         city = self.request.query_params.get('city')
         if city:
@@ -444,7 +449,12 @@ class AdminPendingPropertiesListView(generics.GenericAPIView):
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            import uuid
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
 
         city = self.request.query_params.get('city')
         if city:
@@ -584,7 +594,12 @@ class AdminFeaturedPropertiesListView(generics.GenericAPIView):
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            import uuid
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
 
         city = self.request.query_params.get('city')
         if city:
@@ -678,7 +693,12 @@ class AdminSoldPropertiesListView(generics.GenericAPIView):
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(category=category)
+            import uuid
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(category__name__iexact=category)
 
         city = self.request.query_params.get('city')
         if city:
@@ -1134,7 +1154,12 @@ class AdminReportsModerationListView(generics.GenericAPIView):
 
         category = self.request.query_params.get('category')
         if category:
-            queryset = queryset.filter(listing__category=category)
+            import uuid
+            try:
+                cat_uuid = uuid.UUID(category)
+                queryset = queryset.filter(listing__category_id=cat_uuid)
+            except ValueError:
+                queryset = queryset.filter(listing__category__name__iexact=category)
 
         city = self.request.query_params.get('city')
         if city:
@@ -1503,6 +1528,45 @@ class AdminCategoryListCreateView(generics.ListCreateAPIView):
 class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+    permission_classes = [IsAdminOrModeratorRole]
+
+    def get_permissions(self):
+        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
+            return [IsAdminOnlyRole()]
+        return [IsAdminOrModeratorRole()]
+
+
+class AdminTagListCreateView(generics.ListCreateAPIView):
+    queryset = Tag.objects.all().order_by('-created_at')
+    serializer_class = TagSerializer
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+    permission_classes = [IsAdminOrModeratorRole]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAdminOnlyRole()]
+        return [IsAdminOrModeratorRole()]
+
+    @swagger_auto_schema(
+        operation_description="List all property tags for Admin (paginated).",
+        responses={200: TagSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_description="Create a new property tag (Admin only).",
+        request_body=TagSerializer,
+        responses={201: TagSerializer}
+    )
+    def post(self, request, *args, **kwargs):
+        return super().create(request, *args, **kwargs)
+
+
+class AdminTagDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Tag.objects.all()
+    serializer_class = TagSerializer
     parser_classes = (MultiPartParser, FormParser, JSONParser)
     permission_classes = [IsAdminOrModeratorRole]
 

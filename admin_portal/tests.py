@@ -39,7 +39,11 @@ class AdminPortalAPITests(APITestCase):
             role="agent"
         )
 
-        # Create listings
+        # Create categories and listings
+        from agents.models import Category
+        self.cat_duplex, _ = Category.objects.get_or_create(name="Duplex")
+        self.cat_villa, _ = Category.objects.get_or_create(name="Villa")
+
         self.plan = Plan.objects.create(name="Gold", price=49.99, max_listings=10)
         self.agent_user.agent_profile.plan = self.plan
         self.agent_user.agent_profile.save()
@@ -47,7 +51,7 @@ class AdminPortalAPITests(APITestCase):
         Listing.objects.create(
             agent=self.agent_user,
             title="Active Duplex",
-            category="duplex",
+            category=self.cat_duplex,
             price=50000000.00,
             address="Lekki, Lagos",
             latitude=6.428100,
@@ -58,7 +62,7 @@ class AdminPortalAPITests(APITestCase):
         Listing.objects.create(
             agent=self.agent_user,
             title="Pending Villa",
-            category="villa",
+            category=self.cat_villa,
             price=150000000.00,
             address="Maitama, Abuja",
             latitude=9.076500,
@@ -499,6 +503,37 @@ class AdminPortalAPITests(APITestCase):
         self.assertEqual(agent_res.status_code, status.HTTP_200_OK)
         results = agent_res.data['results'] if isinstance(agent_res.data, dict) and 'results' in agent_res.data else agent_res.data
         self.assertTrue(any(c['name'] == 'Penthouse' for c in results))
+
+    def test_admin_tag_crud_and_agent_list_endpoints(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        admin_token = str(RefreshToken.for_user(self.admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_token}')
+
+        # 1. Admin creates tag
+        tag_url = reverse('admin-tags-list')
+        create_res = self.client.post(tag_url, {
+            "name": "Luxury"
+        }, format='json')
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_res.data['name'], 'Luxury')
+        tag_id = create_res.data['id']
+
+        # 2. Admin lists tags
+        list_res = self.client.get(tag_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+
+        # 3. Admin updates tag
+        detail_url = reverse('admin-tags-detail', kwargs={'pk': tag_id})
+        patch_res = self.client.patch(detail_url, {"name": "Ultra Luxury"}, format='json')
+        self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_res.data['name'], "Ultra Luxury")
+
+        # 4. Agent views tags list
+        agent_tag_url = reverse('agent-tags')
+        agent_res = self.client.get(agent_tag_url)
+        self.assertEqual(agent_res.status_code, status.HTTP_200_OK)
+        results = agent_res.data['results'] if isinstance(agent_res.data, dict) and 'results' in agent_res.data else agent_res.data
+        self.assertTrue(any(t['name'] == 'Ultra Luxury' for t in results))
 
 
 
