@@ -17,6 +17,8 @@ services:
     volumes:
       - static_volume:/app/static
       - media_volume:/app/media
+    env_file:
+      - .env
     environment:
       - DB_NAME=${POSTGRES_DB:-${DB_NAME:-realestatedb}}
       - DB_USER=${POSTGRES_USER:-${DB_USER:-postgres}}
@@ -43,6 +45,8 @@ services:
       - PUSHER_KEY=${PUSHER_KEY}
       - PUSHER_SECRET=${PUSHER_SECRET}
       - PUSHER_CLUSTER=${PUSHER_CLUSTER}
+      - PREMBLY_PUBLIC_KEY=${PREMBLY_PUBLIC_KEY}
+      - PREMBLY_SECRET_KEY=${PREMBLY_SECRET_KEY}
     depends_on:
       - db
     restart: always
