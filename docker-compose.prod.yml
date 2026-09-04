@@ -4,6 +4,8 @@ services:
     container_name: realestate_prod_db
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data/
+    env_file:
+      - .env
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-${DB_NAME:-realestatedb}}
       - POSTGRES_USER=${POSTGRES_USER:-${DB_USER:-postgres}}

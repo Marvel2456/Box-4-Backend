@@ -100,11 +100,11 @@ WSGI_APPLICATION = 'core.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DB_NAME = os.getenv('DB_NAME')
-DB_USER = os.getenv('DB_USER')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_HOST = os.getenv('DB_HOST', 'db')
-DB_PORT = os.getenv('DB_PORT', '5432')
+DB_NAME = os.getenv('DB_NAME') or os.getenv('POSTGRES_DB')
+DB_USER = os.getenv('DB_USER') or os.getenv('POSTGRES_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD') or os.getenv('POSTGRES_PASSWORD')
+DB_HOST = os.getenv('DB_HOST') or os.getenv('POSTGRES_HOST') or 'db'
+DB_PORT = os.getenv('DB_PORT') or os.getenv('POSTGRES_PORT') or '5432'
 
 if DB_NAME and DB_USER:
     DATABASES = {
