@@ -26,13 +26,6 @@ class SavedListingCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Property listing not found.")
 
     def validate(self, attrs):
-        request = self.context.get('request')
-        buyer = request.user
-        listing = attrs.get('listing_id')
-
-        if SavedListing.objects.filter(buyer=buyer, listing=listing).exists():
-            raise serializers.ValidationError("You have already saved this property listing.")
-
         return attrs
 
     def create(self, validated_data):
@@ -99,6 +92,7 @@ class TopLocationSerializer(serializers.Serializer):
 
 
 class BuyerDashboardSerializer(serializers.Serializer):
+    profile_picture = serializers.CharField(allow_null=True, required=False)
     user_location = serializers.DictField()
     nearest_properties = ListingSerializer(many=True)
     top_agents = AgentDetailSerializer(many=True)

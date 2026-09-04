@@ -141,22 +141,35 @@ class BuyerAPITests(APITestCase):
         token = self.get_jwt_token("buyer@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
-        # 1. Save listing
+        # 1. Save listing -> should return full listing details and is_saved=True
         response = self.client.post(self.saved_url, {"listing_id": self.listing_a.id})
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data.get('is_saved'))
+        self.assertIn('listing', response.data)
+        self.assertEqual(response.data['listing']['id'], str(self.listing_a.id))
+        self.assertEqual(response.data['listing']['title'], "Lekki Duplex")
         self.assertTrue(SavedListing.objects.filter(buyer=self.buyer_user, listing=self.listing_a).exists())
 
-        # 2. Prevent saving duplicate
-        dup_response = self.client.post(self.saved_url, {"listing_id": self.listing_a.id})
-        self.assertEqual(dup_response.status_code, status.HTTP_400_BAD_REQUEST)
+        # 2. Toggle unsave by posting the same listing_id again -> should unsave and return is_saved=False
+        toggle_response = self.client.post(self.saved_url, {"listing_id": self.listing_a.id})
+        self.assertEqual(toggle_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(toggle_response.data.get('is_saved'))
+        self.assertEqual(toggle_response.data.get('listing_id'), str(self.listing_a.id))
+        self.assertFalse(SavedListing.objects.filter(buyer=self.buyer_user, listing=self.listing_a).exists())
 
-        # 3. View saved listings
+        # 3. Save it again
+        re_save_response = self.client.post(self.saved_url, {"listing_id": self.listing_a.id})
+        self.assertEqual(re_save_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(re_save_response.data.get('is_saved'))
+        self.assertTrue(SavedListing.objects.filter(buyer=self.buyer_user, listing=self.listing_a).exists())
+
+        # 4. View saved listings
         get_response = self.client.get(self.saved_url)
         self.assertEqual(get_response.status_code, status.HTTP_200_OK)
         saved = get_response.data['results']
         self.assertEqual(len(saved), 1)
 
-        # 4. Remove listing from saved (using property listing UUID)
+        # 5. Remove listing from saved (using DELETE on property listing UUID)
         delete_url = reverse('buyer-saved-detail', kwargs={'pk': self.listing_a.id})
         del_response = self.client.delete(delete_url)
         self.assertEqual(del_response.status_code, status.HTTP_200_OK)
@@ -183,15 +196,23 @@ class BuyerAPITests(APITestCase):
         token = self.get_jwt_token("buyer@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
-        # Update buyer location coordinates
+        # Update buyer location coordinates and profile picture
         profile_url = reverse('buyer-profile')
-        self.client.patch(profile_url, {"latitude": 6.5244, "longitude": 3.3792, "city": "Lagos"}, format='json')
+        self.client.patch(profile_url, {
+            "latitude": 6.5244,
+            "longitude": 3.3792,
+            "city": "Lagos",
+            "profile_picture": "https://box4realestate.cloud/media/profiles/buyer_avatar.webp"
+        }, format='json')
 
         dashboard_url = reverse('buyer-dashboard')
         response = self.client.get(dashboard_url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('user_location', response.data)
+        self.assertIn('profile_picture', response.data)
+        self.assertIn('profile_picture', response.data['user_location'])
         self.assertIn('nearest_properties', response.data)
         self.assertIn('top_agents', response.data)
         self.assertIn('top_locations', response.data)
         self.assertIsNotNone(response.data['user_location']['latitude'])
+        self.assertIsNotNone(response.data['user_location']['profile_picture'])

@@ -150,19 +150,44 @@ class SavedListingViewSet(viewsets.ModelViewSet):
             return SavedListing.objects.none()
         return SavedListing.objects.filter(buyer=self.request.user)
 
-    def perform_create(self, serializer):
-        saved_instance = serializer.save()
-        agent = saved_instance.listing.agent
-        if agent != self.request.user:
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        listing = serializer.validated_data['listing_id']
+        buyer = request.user
+
+        existing_saved = SavedListing.objects.filter(buyer=buyer, listing=listing).first()
+
+        if existing_saved:
+            existing_saved.delete()
+            return Response({
+                "message": "Listing removed from saved properties.",
+                "is_saved": False,
+                "listing_id": str(listing.id)
+            }, status=status.HTTP_200_OK)
+
+        saved_instance = SavedListing.objects.create(buyer=buyer, listing=listing)
+
+        # Notify agent if not the same user
+        agent = listing.agent
+        if agent != buyer:
             from notifications.models import Notification
             Notification.objects.create(
                 recipient=agent,
-                sender=self.request.user,
+                sender=buyer,
                 notification_type='saved_listing',
                 title='Listing Saved',
-                message=f"{self.request.user.full_name} saved your property listing '{saved_instance.listing.title}'.",
-                listing=saved_instance.listing
+                message=f"{buyer.full_name} saved your property listing '{listing.title}'.",
+                listing=listing
             )
+
+        listing_data = ListingSerializer(listing, context={'request': request}).data
+        return Response({
+            "message": "Listing saved successfully.",
+            "is_saved": True,
+            "saved_listing_id": str(saved_instance.id),
+            "listing": listing_data
+        }, status=status.HTTP_201_CREATED)
 
     def destroy(self, request, *args, **kwargs):
         # Allow deletion by saved listing pk or property listing uuid
@@ -187,6 +212,13 @@ class BuyerDashboardView(generics.GenericAPIView):
         user = request.user
         profile = getattr(user, 'buyer_profile', None)
 
+        profile_pic_url = None
+        if profile and profile.profile_picture:
+            try:
+                profile_pic_url = request.build_absolute_uri(profile.profile_picture.url)
+            except Exception:
+                profile_pic_url = str(profile.profile_picture)
+
         # 1. Determine buyer coordinates
         lat_param = request.query_params.get('lat') or request.query_params.get('latitude')
         lng_param = request.query_params.get('lng') or request.query_params.get('longitude')
@@ -209,6 +241,9 @@ class BuyerDashboardView(generics.GenericAPIView):
                 pass
 
         user_location_data = {
+            "full_name": user.full_name,
+            "email": user.email,
+            "profile_picture": profile_pic_url,
             "latitude": buyer_lat,
             "longitude": buyer_lng,
             "city": profile.city if profile else None,
@@ -278,6 +313,7 @@ class BuyerDashboardView(generics.GenericAPIView):
             })
 
         return Response({
+            "profile_picture": profile_pic_url,
             "user_location": user_location_data,
             "nearest_properties": top_10_nearest,
             "top_agents": top_agents_data,
