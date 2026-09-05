@@ -5,6 +5,47 @@ import uuid
 from django.db import migrations, models
 
 
+def migrate_categories_forward(apps, schema_editor):
+    Listing = apps.get_model('agents', 'Listing')
+    Category = apps.get_model('agents', 'Category')
+    
+    # Map common slug/lowercase names to Title Case
+    name_map = {
+        'house': 'House',
+        'apartment': 'Apartment',
+        'lodge': 'Lodge',
+        'mall': 'Mall',
+        'hotel': 'Hotel',
+        'villa': 'Villa',
+        'condo': 'Condo',
+        'shop': 'Shop',
+        'land': 'Land',
+        'bungalow': 'Bungalow',
+        'plaza': 'Plaza',
+        'duplex': 'Duplex',
+        'multi_story_building': 'Multi-story Building',
+        'single_flat': 'Single flat',
+        'airbnb': 'Airbnb',
+    }
+    
+    for listing in Listing.objects.all():
+        raw_val = getattr(listing, 'old_category', None)
+        if raw_val:
+            raw_str = str(raw_val).strip()
+            cat_name = name_map.get(raw_str.lower(), raw_str.capitalize() if raw_str else 'Other')
+            category_obj, _ = Category.objects.get_or_create(name=cat_name)
+            listing.category = category_obj
+            listing.save(update_fields=['category'])
+        else:
+            default_cat, _ = Category.objects.get_or_create(name='Other')
+            listing.category = default_cat
+            listing.save(update_fields=['category'])
+
+
+def migrate_categories_backward(apps, schema_editor):
+    pass
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -41,10 +82,25 @@ class Migration(migrations.Migration):
             name='state',
             field=models.CharField(blank=True, db_index=True, max_length=250, null=True),
         ),
+        migrations.RenameField(
+            model_name='listing',
+            old_name='category',
+            new_name='old_category',
+        ),
+        migrations.AddField(
+            model_name='listing',
+            name='category',
+            field=models.ForeignKey(null=True, on_delete=django.db.models.deletion.CASCADE, related_name='listings', to='agents.category'),
+        ),
+        migrations.RunPython(migrate_categories_forward, migrate_categories_backward),
         migrations.AlterField(
             model_name='listing',
             name='category',
             field=models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='listings', to='agents.category'),
+        ),
+        migrations.RemoveField(
+            model_name='listing',
+            name='old_category',
         ),
         migrations.AddField(
             model_name='listing',
