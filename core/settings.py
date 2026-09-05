@@ -215,7 +215,14 @@ DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'info@box4homes.com')
 # Cloudflare R2 Configuration (S3 compatible)
 USE_R2 = os.getenv('USE_R2', 'False') == 'True'
 if USE_R2:
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
     AWS_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID')
     AWS_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY')
     AWS_STORAGE_BUCKET_NAME = os.getenv('R2_BUCKET_NAME')
@@ -225,6 +232,8 @@ if USE_R2:
     
     # Public bucket URLs do not require signature query parameters
     AWS_QUERYSTRING_AUTH = False
+    AWS_DEFAULT_ACL = None
+    AWS_S3_FILE_OVERWRITE = False
     
     R2_CUSTOM_DOMAIN = os.getenv('R2_CUSTOM_DOMAIN')
     if R2_CUSTOM_DOMAIN:
