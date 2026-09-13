@@ -185,6 +185,7 @@ class BuyerAPITests(APITestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['full_name'], "Premium Agent")
         self.assertEqual(float(results[0]['rating']), 4.8)
+        self.assertNotIn('listings', results[0])
 
         # 2. Agent Detail view
         detail_url = reverse('buyer-agents-detail', kwargs={'pk': self.agent_user.id})

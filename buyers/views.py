@@ -11,7 +11,8 @@ from drf_yasg import openapi
 
 from .models import SavedListing
 from .serializers import (
-    SavedListingSerializer, SavedListingCreateSerializer, AgentDetailSerializer, BuyerDashboardSerializer
+    SavedListingSerializer, SavedListingCreateSerializer, AgentListSerializer,
+    AgentDetailSerializer, BuyerDashboardSerializer
 )
 from agents.models import Listing
 from agents.serializers import ListingSerializer
@@ -191,8 +192,12 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
 
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = User.objects.filter(role='agent').order_by('-agent_profile__rating')
-    serializer_class = AgentDetailSerializer
     permission_classes = [permissions.AllowAny]
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return AgentListSerializer
+        return AgentDetailSerializer
 
 
 class SavedListingViewSet(viewsets.ModelViewSet):
@@ -346,7 +351,7 @@ class BuyerDashboardView(generics.GenericAPIView):
             .annotate(active_count=Count('listings', filter=Q(listings__is_published=True, listings__status='active')))\
             .order_by('-active_count', '-agent_profile__rating', '-date_joined')[:6]
 
-        top_agents_data = AgentDetailSerializer(top_agents_qs, many=True, context={'request': request}).data
+        top_agents_data = AgentListSerializer(top_agents_qs, many=True, context={'request': request}).data
 
         # 4. Top Locations (Highest property density)
         raw_locations = Listing.objects.filter(is_published=True, status='active')\

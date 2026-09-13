@@ -43,7 +43,7 @@ class SavedListingSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'buyer', 'listing', 'created_at')
 
 
-class AgentDetailSerializer(serializers.ModelSerializer):
+class AgentListSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(source='agent_profile.phone_number', read_only=True, default=None)
     profile_picture = serializers.SerializerMethodField()
     agency_name = serializers.CharField(source='agent_profile.agency_name', read_only=True, default=None)
@@ -52,14 +52,13 @@ class AgentDetailSerializer(serializers.ModelSerializer):
     bio = serializers.CharField(source='agent_profile.bio', read_only=True, default=None)
     total_listings_count = serializers.SerializerMethodField()
     date_joined = serializers.DateTimeField(read_only=True)
-    listings = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id', 'email', 'full_name', 'role', 'phone_number', 'profile_picture',
             'agency_name', 'license_number', 'rating', 'bio', 'date_joined',
-            'total_listings_count', 'listings'
+            'total_listings_count'
         )
 
     def get_profile_picture(self, obj):
@@ -78,6 +77,13 @@ class AgentDetailSerializer(serializers.ModelSerializer):
     def get_total_listings_count(self, obj):
         return Listing.objects.filter(agent=obj, is_published=True).count()
 
+
+class AgentDetailSerializer(AgentListSerializer):
+    listings = serializers.SerializerMethodField()
+
+    class Meta(AgentListSerializer.Meta):
+        fields = AgentListSerializer.Meta.fields + ('listings',)
+
     def get_listings(self, obj):
         request = self.context.get('request')
         listings = Listing.objects.filter(agent=obj, is_published=True).order_by('-created_at')
@@ -95,5 +101,5 @@ class BuyerDashboardSerializer(serializers.Serializer):
     profile_picture = serializers.CharField(allow_null=True, required=False)
     user_location = serializers.DictField()
     nearest_properties = ListingSerializer(many=True)
-    top_agents = AgentDetailSerializer(many=True)
+    top_agents = AgentListSerializer(many=True)
     top_locations = TopLocationSerializer(many=True)
