@@ -15,6 +15,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
+        username_field = self.username_field
+        if username_field in attrs and isinstance(attrs[username_field], str):
+            attrs[username_field] = attrs[username_field].strip().lower()
+        if 'email' in attrs and isinstance(attrs['email'], str):
+            attrs['email'] = attrs['email'].strip().lower()
+        if 'username' in attrs and isinstance(attrs['username'], str):
+            attrs['username'] = attrs['username'].strip().lower()
+
         data = super().validate(attrs)
         data['role'] = self.user.role
         data['id'] = self.user.id
@@ -35,14 +43,20 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         }
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
+        if not value:
+            raise serializers.ValidationError("Email is required.")
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
             raise serializers.ValidationError("A user with this email already exists.")
         return value
 
     def create(self, validated_data):
-        # Automatically set username to email if not provided
+        # Automatically lowercase email and username
+        validated_data['email'] = validated_data['email'].strip().lower()
         if 'username' not in validated_data or not validated_data['username']:
             validated_data['username'] = validated_data['email']
+        else:
+            validated_data['username'] = validated_data['username'].strip().lower()
             
         password = validated_data.pop('password')
         user = User(**validated_data)
@@ -52,18 +66,9 @@ class UserRegisterSerializer(serializers.ModelSerializer):
         # Generate and save OTP
         otp = EmailOTP.objects.create(user=user)
         
-        # Send OTP code
-        try:
-            from django.conf import settings
-            send_mail(
-                subject="Email Verification Code",
-                message=f"Your verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-        except Exception as e:
-            print(f"[OTP Email Error] Failed to send verification email to {user.email}: {e}")
+        # Send OTP verification email
+        from core.emails import send_otp_verification_email
+        send_otp_verification_email(user.email, otp.otp_code, fail_silently=True)
             
         return user
 
@@ -74,10 +79,13 @@ class OTPVerifySerializer(serializers.Serializer):
 
     def validate(self, attrs):
         email = attrs.get('email')
+        if email:
+            email = email.strip().lower()
+            attrs['email'] = email
         otp_code = attrs.get('otp_code')
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
 
@@ -103,8 +111,9 @@ class OTPResendSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
+        value = value.strip().lower()
         try:
-            self.user = User.objects.get(email=value)
+            self.user = User.objects.get(email__iexact=value)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
         return value
@@ -119,8 +128,9 @@ class ForgotPasswordSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
+        value = value.strip().lower()
         try:
-            self.user = User.objects.get(email=value)
+            self.user = User.objects.get(email__iexact=value)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
         return value
@@ -133,10 +143,13 @@ class ResetPasswordSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         email = attrs.get('email')
+        if email:
+            email = email.strip().lower()
+            attrs['email'] = email
         otp_code = attrs.get('otp_code')
 
         try:
-            user = User.objects.get(email=email)
+            user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
 

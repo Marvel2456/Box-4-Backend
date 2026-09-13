@@ -74,6 +74,52 @@ class AuthenticationTests(APITestCase):
         otp.refresh_from_db()
         self.assertTrue(otp.is_used)
 
+    def test_register_with_uppercase_email_stores_lowercase(self):
+        data = {
+            "email": "Test.Buyer@Example.COM",
+            "password": "securepassword123",
+            "full_name": "Test Upper",
+            "role": "buyer"
+        }
+        response = self.client.post(self.register_url, data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['user']['email'], "test.buyer@example.com")
+
+        # Verify DB entry is lowercase
+        user = User.objects.get(email="test.buyer@example.com")
+        self.assertEqual(user.email, "test.buyer@example.com")
+        self.assertEqual(user.username, "test.buyer@example.com")
+
+        # Attempt to register with uppercase again -> should fail with duplicate error
+        dup_res = self.client.post(self.register_url, {
+            "email": "TEST.BUYER@EXAMPLE.COM",
+            "password": "anotherpassword123",
+            "full_name": "Duplicate User",
+            "role": "buyer"
+        })
+        self.assertEqual(dup_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_login_with_uppercase_email(self):
+        user = User.objects.create_user(
+            email="caseuser@example.com",
+            username="caseuser@example.com",
+            password="testpassword123",
+            full_name="Case User",
+            role="buyer"
+        )
+        user.is_email_verified = True
+        user.save()
+
+        # Login with capitalized/uppercase email
+        data = {
+            "email": "CASEUSER@EXAMPLE.COM",
+            "password": "testpassword123"
+        }
+        response = self.client.post(self.login_url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        self.assertEqual(response.data['email'], "caseuser@example.com")
+
     def test_login_response_contains_role(self):
         user = User.objects.create_user(
             email="login@example.com",

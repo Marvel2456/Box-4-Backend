@@ -1,9 +1,31 @@
 from django.db import models
 import uuid
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager as BaseUserManager
 from django.utils import timezone
 from datetime import timedelta
 import random
+
+class CustomUserManager(BaseUserManager):
+    def create_user(self, username=None, email=None, password=None, **extra_fields):
+        if email:
+            email = email.strip().lower()
+        if username:
+            if '@' in username or (email and username == email):
+                username = username.strip().lower()
+        elif email:
+            username = email
+        return super().create_user(username, email, password, **extra_fields)
+
+    def create_superuser(self, username=None, email=None, password=None, **extra_fields):
+        if email:
+            email = email.strip().lower()
+        if username:
+            if '@' in username or (email and username == email):
+                username = username.strip().lower()
+        elif email:
+            username = email
+        return super().create_superuser(username, email, password, **extra_fields)
+
 
 class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -25,6 +47,22 @@ class User(AbstractUser):
     
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
+
+    objects = CustomUserManager()
+
+    def clean(self):
+        super().clean()
+        if self.email:
+            self.email = self.email.strip().lower()
+        if self.username and ('@' in self.username or (self.email and self.username == self.email)):
+            self.username = self.username.strip().lower()
+
+    def save(self, *args, **kwargs):
+        if self.email:
+            self.email = self.email.strip().lower()
+        if self.username and ('@' in self.username or (self.email and self.username == self.email)):
+            self.username = self.username.strip().lower()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.email} ({self.role})"

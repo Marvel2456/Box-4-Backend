@@ -118,17 +118,8 @@ class OTPResendView(generics.GenericAPIView):
         otp = EmailOTP.objects.create(user=user)
         
         # Send Email
-        try:
-            from django.conf import settings
-            send_mail(
-                subject="Email Verification Code (Resend)",
-                message=f"Your verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-        except Exception:
-            pass
+        from core.emails import send_otp_verification_email
+        send_otp_verification_email(user.email, otp.otp_code, fail_silently=True)
             
         return Response({
             "message": "A new 4-digit verification code has been sent to your email."
@@ -153,6 +144,7 @@ class GoogleAuthView(generics.GenericAPIView):
         email = idinfo.get('email')
         if not email:
             return Response({"error": "Google token does not contain email address"}, status=status.HTTP_400_BAD_REQUEST)
+        email = email.strip().lower()
             
         full_name = idinfo.get('name')
         if not full_name:
@@ -215,17 +207,8 @@ class ForgotPasswordView(generics.GenericAPIView):
         otp = EmailOTP.objects.create(user=user, otp_type='password_reset')
         
         # Send Email
-        try:
-            from django.conf import settings
-            send_mail(
-                subject="Password Reset Verification Code",
-                message=f"Your password reset verification code is: {otp.otp_code}. It will expire in 10 minutes.",
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
-        except Exception:
-            pass
+        from core.emails import send_password_reset_otp_email
+        send_password_reset_otp_email(user.email, otp.otp_code, fail_silently=True)
             
         return Response({
             "message": "A 4-digit verification code has been sent to your email to reset your password."
