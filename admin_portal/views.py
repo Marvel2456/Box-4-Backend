@@ -33,7 +33,9 @@ from .serializers import (
     AdminReportItemSerializer,
     ReportsModerationResponseSerializer,
     PlanManagementSerializer,
+    BoostPlanManagementSerializer,
     FeaturedPlanManagementSerializer,
+    AdminBoostPlacementItemSerializer,
     AdminSubscriptionItemSerializer,
     SubscriptionsResponseSerializer,
     AdminListingFeatureItemSerializer,
@@ -44,7 +46,10 @@ from .serializers import (
 )
 from agents.models import Listing, Report, Category, Tag
 from agents.serializers import CategorySerializer, TagSerializer
-from profiles.models import AgentProfile, Plan, AdminProfile, AgentSubscription, FeaturedPlan, ListingFeature
+from profiles.models import (
+    AgentProfile, Plan, AdminProfile, AgentSubscription,
+    FeaturedPlan, ListingFeature, BoostPlan, ListingBoostPlacement
+)
 from core.pagination import CustomPageNumberPagination
 
 User = get_user_model()
@@ -1316,16 +1321,65 @@ class AdminSubscriptionsListView(generics.GenericAPIView):
         })
 
 
-class AdminPlanCreateView(generics.CreateAPIView):
+class AdminPlanListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminOnlyRole]
-    queryset = Plan.objects.all()
+    queryset = Plan.objects.all().order_by('price')
     serializer_class = PlanManagementSerializer
+    pagination_class = None
+
+    @swagger_auto_schema(
+        operation_description="List all subscription plans or create a new plan with custom thresholds.",
+        responses={200: PlanManagementSerializer(many=True), 201: PlanManagementSerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
 
 class AdminPlanDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminOnlyRole]
     queryset = Plan.objects.all()
     serializer_class = PlanManagementSerializer
+
+
+class AdminBoostPlanListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsAdminOnlyRole]
+    queryset = BoostPlan.objects.all().order_by('duration_days', 'price')
+    serializer_class = BoostPlanManagementSerializer
+    pagination_class = None
+
+    @swagger_auto_schema(
+        operation_description="List all boost plans/durations or create a new boost plan.",
+        responses={200: BoostPlanManagementSerializer(many=True), 201: BoostPlanManagementSerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class AdminBoostPlanDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAdminOnlyRole]
+    queryset = BoostPlan.objects.all()
+    serializer_class = BoostPlanManagementSerializer
+
+
+class AdminBoostPlacementsListView(generics.ListAPIView):
+    permission_classes = [IsAdminOnlyRole]
+    queryset = ListingBoostPlacement.objects.all().select_related('listing', 'agent', 'boost_plan').order_by('-created_at')
+    serializer_class = AdminBoostPlacementItemSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                Q(listing__title__icontains=search) |
+                Q(agent__full_name__icontains=search) |
+                Q(agent__email__icontains=search) |
+                Q(payment_reference__icontains=search)
+            )
+        return queryset
 
 
 class AdminRevenueOverviewView(generics.GenericAPIView):

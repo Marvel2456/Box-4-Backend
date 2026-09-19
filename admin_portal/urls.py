@@ -26,8 +26,11 @@ from .views import (
     AdminResolveReportView,
     AdminDismissReportView,
     AdminSubscriptionsListView,
-    AdminPlanCreateView,
+    AdminPlanListCreateView,
     AdminPlanDetailView,
+    AdminBoostPlanListCreateView,
+    AdminBoostPlanDetailView,
+    AdminBoostPlacementsListView,
     AdminRevenueOverviewView,
     AdminFeaturedPlansListView,
     AdminFeaturedPlanCreateView,
@@ -99,9 +102,18 @@ urlpatterns = [
     path('finance/subscriptions/', AdminSubscriptionsListView.as_view(), name='admin-finance-subscriptions'),
     path('finance/subscriptions/<uuid:pk>/', AdminSubscriptionDetailView.as_view(), name='admin-finance-subscription-detail'),
     path('finance/subscriptions/<uuid:pk>/send-reminder/', AdminSendSubscriptionReminderView.as_view(), name='admin-finance-subscription-send-reminder'),
-    path('finance/plans/', AdminPlanCreateView.as_view(), name='admin-finance-plans-create'),
+    path('finance/plans/', AdminPlanListCreateView.as_view(), name='admin-finance-plans-list-create'),
     path('finance/plans/<uuid:pk>/', AdminPlanDetailView.as_view(), name='admin-finance-plans-detail'),
+    path('plans/', AdminPlanListCreateView.as_view(), name='admin-plans-list-create'),
+    path('plans/<uuid:pk>/', AdminPlanDetailView.as_view(), name='admin-plans-detail'),
     path('finance/revenue-overview/', AdminRevenueOverviewView.as_view(), name='admin-finance-revenue-overview'),
+
+    # Finance: Boost Plans & Boost Placements
+    path('boost-plans/', AdminBoostPlanListCreateView.as_view(), name='admin-boost-plans-list-create'),
+    path('boost-plans/<uuid:pk>/', AdminBoostPlanDetailView.as_view(), name='admin-boost-plans-detail'),
+    path('finance/boost-plans/', AdminBoostPlanListCreateView.as_view(), name='admin-finance-boost-plans-list-create'),
+    path('finance/boost-plans/<uuid:pk>/', AdminBoostPlanDetailView.as_view(), name='admin-finance-boost-plans-detail'),
+    path('finance/boosts/', AdminBoostPlacementsListView.as_view(), name='admin-finance-boosts-list'),
 
     # Finance: Features & Featured Details
     path('finance/features/', AdminFeaturedPlansListView.as_view(), name='admin-finance-features'),

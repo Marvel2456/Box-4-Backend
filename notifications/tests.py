@@ -11,7 +11,7 @@ User = get_user_model()
 
 class NotificationAPITests(APITestCase):
     def setUp(self):
-        self.plan = Plan.objects.create(name="Gold", price=19.99, max_listings=10)
+        self.plan = Plan.objects.create(name="Gold", price=19.99, max_boosted=5)
 
         self.agent_user = User.objects.create_user(
             email="notifagent@example.com",

@@ -12,7 +12,7 @@ User = get_user_model()
 class BuyerAPITests(APITestCase):
     def setUp(self):
         # 1. Create a Plan & subscribed Agent
-        self.plan = Plan.objects.create(name="Gold", price=19.99, max_listings=10)
+        self.plan = Plan.objects.create(name="Gold", price=19.99, max_boosted=5, max_featured=2)
         
         self.agent_user = User.objects.create_user(
             email="agent@example.com",

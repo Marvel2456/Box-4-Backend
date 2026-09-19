@@ -169,14 +169,6 @@ class ListingSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "Your account KYC is not verified. Please complete your NIN and CAC identity verification to list properties."
                 )
-
-            # Enforce total listing limits (0 means unlimited)
-            if plan.max_listings > 0:
-                current_count = Listing.objects.filter(agent=user).count()
-                if current_count >= plan.max_listings:
-                    raise serializers.ValidationError(
-                        f"You have reached the maximum listing limit of {plan.max_listings} for the '{plan.name}' plan. Please upgrade to a higher plan."
-                    )
         return attrs
 
     def create(self, validated_data):

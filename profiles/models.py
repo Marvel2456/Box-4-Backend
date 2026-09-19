@@ -5,17 +5,34 @@ from django.dispatch import receiver
 import uuid
 
 class Plan(models.Model):
+    BILLING_CYCLE_CHOICES = (
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('yearly', 'Yearly'),
+    )
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    max_listings = models.PositiveIntegerField(default=10, help_text="Maximum total listings allowed. Set to 0 for unlimited.")
-    max_boosted = models.PositiveIntegerField(default=0, help_text="Maximum boosted listings allowed.")
-    max_featured = models.PositiveIntegerField(default=0, help_text="Maximum featured listings allowed.")
+    billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly')
+    
+    # Plan Thresholds
+    max_boosted = models.PositiveIntegerField(default=2, help_text="Maximum concurrent active pay-as-you-go boosted listings allowed (0 for unlimited).")
+    max_featured = models.PositiveIntegerField(default=0, help_text="Monthly featured listings allowance bundled into plan (0 for none/unlimited).")
+    max_images_per_listing = models.PositiveIntegerField(default=10, help_text="Maximum property photos allowed per listing (0 for unlimited).")
+    
+    # Feature Flags
+    has_verified_badge = models.BooleanField(default=False, help_text="Displays priority verified agent badge.")
+    features = models.JSONField(default=list, blank=True, help_text="List of marketing feature bullet points.")
+    
+    is_active = models.BooleanField(default=True)
+    is_popular = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"{self.name} (${self.price})"
+        return f"{self.name} (N{self.price}/{self.billing_cycle})"
 
 
 from core.image_processing import process_and_convert_to_webp
@@ -177,6 +194,9 @@ class AgentSubscription(models.Model):
     date_started = models.DateTimeField(auto_now_add=True)
     next_renewal = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    auto_renew = models.BooleanField(default=True)
+    payment_method = models.CharField(max_length=50, default='card')
+    transaction_reference = models.CharField(max_length=100, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -187,14 +207,63 @@ class AgentSubscription(models.Model):
         return f"{self.agent.email} - {self.plan.name if self.plan else 'Plan'} ({self.status})"
 
 
+class BoostPlan(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+    duration_days = models.PositiveIntegerField(default=7, help_text="Duration of the boost in days (e.g., 3, 7, 14, 30).")
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=2500.00)
+    description = models.TextField(blank=True, null=True)
+    features = models.JSONField(default=list, blank=True, help_text="List of feature bullet points.")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['duration_days', 'price']
+
+    def __str__(self):
+        return f"{self.name} ({self.duration_days} days - N{self.price})"
+
+
+class ListingBoostPlacement(models.Model):
+    STATUS_CHOICES = (
+        ('active', 'Active'),
+        ('expired', 'Expired'),
+        ('cancelled', 'Cancelled'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    listing = models.ForeignKey('agents.Listing', on_delete=models.CASCADE, related_name='boost_placements')
+    agent = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='boost_placements')
+    boost_plan = models.ForeignKey(BoostPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='placements')
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    duration_days = models.PositiveIntegerField(default=7)
+    date_started = models.DateTimeField(auto_now_add=True)
+    date_expires = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
+    payment_reference = models.CharField(max_length=100, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Boost: {self.listing.title} ({self.duration_days} days - {self.status})"
+
+
 class FeaturedPlan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     duration_days = models.PositiveIntegerField(default=7)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=5000.00)
     features = models.JSONField(default=list, blank=True, help_text="List of feature bullet points")
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['duration_days', 'price']
 
     def __str__(self):
         return f"{self.name} (N{self.price})"

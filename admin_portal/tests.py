@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.utils import timezone
 from agents.models import Listing, Report
-from profiles.models import Plan, AgentProfile, AgentSubscription, FeaturedPlan, ListingFeature
+from profiles.models import Plan, AgentProfile, AgentSubscription, FeaturedPlan, ListingFeature, BoostPlan, ListingBoostPlacement
 
 User = get_user_model()
 
@@ -44,7 +44,7 @@ class AdminPortalAPITests(APITestCase):
         self.cat_duplex, _ = Category.objects.get_or_create(name="Duplex")
         self.cat_villa, _ = Category.objects.get_or_create(name="Villa")
 
-        self.plan = Plan.objects.create(name="Gold", price=49.99, max_listings=10)
+        self.plan = Plan.objects.create(name="Gold", price=49.99, max_boosted=5, max_featured=2)
         self.agent_user.agent_profile.plan = self.plan
         self.agent_user.agent_profile.save()
 
@@ -431,6 +431,102 @@ class AdminPortalAPITests(APITestCase):
         feat_rem_url = reverse('admin-finance-feature-send-reminder', kwargs={'pk': feature.id})
         feat_rem_res = self.client.post(feat_rem_url)
         self.assertEqual(feat_rem_res.status_code, status.HTTP_200_OK)
+
+    def test_admin_plan_crud_with_custom_thresholds(self):
+        token = self.get_admin_jwt_token()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Create a Plan with custom thresholds
+        create_url = reverse('admin-plans-list-create')
+        data = {
+            "name": "Platinum Elite",
+            "description": "Top tier plan for agencies",
+            "price": 99.99,
+            "billing_cycle": "monthly",
+            "max_boosted": 20,
+            "max_featured": 8,
+            "max_images_per_listing": 30,
+            "has_verified_badge": True,
+            "is_popular": True
+        }
+        res = self.client.post(create_url, data, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['name'], "Platinum Elite")
+        self.assertEqual(res.data['max_boosted'], 20)
+        self.assertEqual(res.data['max_featured'], 8)
+        self.assertEqual(res.data['max_images_per_listing'], 30)
+        self.assertTrue(res.data['has_verified_badge'])
+        plan_id = res.data['id']
+
+        # 2. List Plans
+        list_res = self.client.get(create_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(list_res.data), 2)
+
+        # 3. Update Plan
+        detail_url = reverse('admin-plans-detail', kwargs={'pk': plan_id})
+        update_res = self.client.patch(detail_url, {"price": 129.99, "max_boosted": 25}, format='json')
+        self.assertEqual(update_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(float(update_res.data['price']), 129.99)
+        self.assertEqual(update_res.data['max_boosted'], 25)
+
+        # 4. Delete Plan
+        del_res = self.client.delete(detail_url)
+        self.assertEqual(del_res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Plan.objects.filter(id=plan_id).exists())
+
+    def test_admin_boost_plan_crud_and_placements_monitoring(self):
+        token = self.get_admin_jwt_token()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Create a Boost Plan with custom duration and price
+        create_url = reverse('admin-boost-plans-list-create')
+        data = {
+            "name": "14 Days Flash Boost",
+            "duration_days": 14,
+            "price": 4500.00,
+            "description": "Boost listing for two full weeks",
+            "features": ["Top search placement", "Badge overlay"]
+        }
+        res = self.client.post(create_url, data, format='json')
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data['name'], "14 Days Flash Boost")
+        self.assertEqual(res.data['duration_days'], 14)
+        self.assertEqual(float(res.data['price']), 4500.00)
+        boost_plan_id = res.data['id']
+
+        # 2. List Boost Plans
+        list_res = self.client.get(create_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_res.data), 1)
+
+        # 3. Update Boost Plan
+        detail_url = reverse('admin-boost-plans-detail', kwargs={'pk': boost_plan_id})
+        patch_res = self.client.patch(detail_url, {"price": 4000.00, "duration_days": 15}, format='json')
+        self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(float(patch_res.data['price']), 4000.00)
+
+        # 4. Boost a listing and view placements in admin
+        boost_plan = BoostPlan.objects.get(id=boost_plan_id)
+        listing = Listing.objects.get(title="Active Duplex")
+        from profiles.models import ListingBoostPlacement
+        ListingBoostPlacement.objects.create(
+            listing=listing,
+            agent=self.agent_user,
+            boost_plan=boost_plan,
+            amount=4000.00,
+            duration_days=15,
+            date_expires=timezone.now() + timezone.timedelta(days=15),
+            status='active',
+            payment_reference="PAY-REF-123"
+        )
+
+        placements_url = reverse('admin-finance-boosts-list')
+        place_res = self.client.get(placements_url)
+        self.assertEqual(place_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(place_res.data['results']), 1)
+        self.assertEqual(place_res.data['results'][0]['listing_title'], "Active Duplex")
+        self.assertEqual(place_res.data['results'][0]['payment_reference'], "PAY-REF-123")
 
     def test_moderator_role_permissions(self):
         # 1. Admin invites a moderator user

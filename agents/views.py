@@ -18,8 +18,9 @@ from .serializers import (
     AgentKYCSubmitSerializer,
     AgentKYCSerializer
 )
-from profiles.models import AgentProfile, AgentKYC
+from profiles.models import AgentProfile, AgentKYC, BoostPlan, ListingBoostPlacement
 from profiles.serializers import AgentProfileSerializer
+from .subscription_serializers import ListingBoostRequestSerializer
 from core.prembly import PremblyService
 
 class IsAgentOwnerOrReadOnly(permissions.BasePermission):
@@ -281,7 +282,8 @@ class ListingBoostView(generics.GenericAPIView):
     serializer_class = ListingSerializer
 
     @swagger_auto_schema(
-        operation_description="Toggle boost status on a property listing.",
+        operation_description="Pay-As-You-Boost a property listing with an admin-configured boost plan / duration or unboost a listing.",
+        request_body=ListingBoostRequestSerializer,
         responses={200: "Listing boosted / unboosted successfully."}
     )
     def post(self, request, pk, *args, **kwargs):
@@ -291,36 +293,80 @@ class ListingBoostView(generics.GenericAPIView):
         if listing.agent != request.user and request.user.role != 'admin':
             return Response({"error": "You do not have permission to manage this listing."}, status=status.HTTP_403_FORBIDDEN)
             
-        # Toggle off is always allowed
-        if listing.is_boosted:
+        # Toggle off / unboost is always allowed
+        action = request.data.get('action')
+        if action == 'unboost' or (listing.is_boosted and request.data.get('is_boosted') is False and not request.data.get('boost_plan_id')):
             listing.is_boosted = False
             listing.save()
+            ListingBoostPlacement.objects.filter(listing=listing, status='active').update(status='cancelled')
             return Response({
                 "message": "Listing unboosted successfully.",
-                "is_boosted": listing.is_boosted
+                "is_boosted": False
             }, status=status.HTTP_200_OK)
 
-        # Toggle on requires plan check
-        try:
-            profile = listing.agent.agent_profile
-        except AgentProfile.DoesNotExist:
-            return Response({"error": "Agent profile not found."}, status=status.HTTP_400_BAD_REQUEST)
+        # Pay-As-You-Boost: determine maximum allowed concurrent boosted listings based on plan (default 2 for free tier)
+        profile = getattr(listing.agent, 'agent_profile', None)
+        plan = profile.plan if profile else None
+        max_boosted = plan.max_boosted if plan else 2
 
-        plan = profile.plan
-        if not plan:
-            return Response({"error": "No active subscription plan found. Please subscribe to boost listings."}, status=status.HTTP_403_FORBIDDEN)
-
-        current_boosted_count = Listing.objects.filter(agent=listing.agent, is_boosted=True).count()
-        if current_boosted_count >= plan.max_boosted:
+        current_active_boosted_count = Listing.objects.filter(agent=listing.agent, is_boosted=True).exclude(pk=listing.pk).count()
+        if max_boosted > 0 and current_active_boosted_count >= max_boosted:
+            plan_name = plan.name if plan else "Free Tier"
             return Response({
-                "error": f"You have reached your plan limit of {plan.max_boosted} boosted listings on the '{plan.name}' plan. Please upgrade to boost more."
+                "error": f"You have reached your limit of {max_boosted} active boosted listings on the '{plan_name}'. Please upgrade your subscription plan to boost more listings simultaneously."
             }, status=status.HTTP_403_FORBIDDEN)
+
+        # Resolve Boost Plan
+        boost_plan_id = request.data.get('boost_plan_id')
+        boost_plan = None
+        duration_days = 7
+        amount = 2500.00
+        if boost_plan_id:
+            try:
+                boost_plan = BoostPlan.objects.get(pk=boost_plan_id, is_active=True)
+                duration_days = boost_plan.duration_days
+                amount = float(boost_plan.price)
+            except (BoostPlan.DoesNotExist, ValueError):
+                return Response({"error": "Selected boost plan was not found or is inactive."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Fallback to default/first active boost plan or standard 7 days
+            boost_plan = BoostPlan.objects.filter(is_active=True).first()
+            if boost_plan:
+                duration_days = boost_plan.duration_days
+                amount = float(boost_plan.price)
+
+        date_expires = timezone.now() + timedelta(days=duration_days)
+        payment_ref = request.data.get('payment_reference')
+
+        # Deactivate previous active placements for this listing
+        ListingBoostPlacement.objects.filter(listing=listing, status='active').update(status='expired')
+
+        # Create placement record
+        placement = ListingBoostPlacement.objects.create(
+            listing=listing,
+            agent=listing.agent,
+            boost_plan=boost_plan,
+            amount=amount,
+            duration_days=duration_days,
+            date_expires=date_expires,
+            status='active',
+            payment_reference=payment_ref
+        )
 
         listing.is_boosted = True
         listing.save()
+
         return Response({
-            "message": "Listing boosted successfully!",
-            "is_boosted": listing.is_boosted
+            "message": f"Listing boosted successfully for {duration_days} days!",
+            "is_boosted": True,
+            "placement": {
+                "id": str(placement.id),
+                "boost_plan_name": boost_plan.name if boost_plan else f"{duration_days} Days Boost",
+                "duration_days": duration_days,
+                "amount": amount,
+                "date_started": placement.date_started,
+                "date_expires": placement.date_expires
+            }
         }, status=status.HTTP_200_OK)
 
 
@@ -435,6 +481,19 @@ class ListingUploadPhotosView(generics.GenericAPIView):
                 listing = Listing.objects.get(pk=listing_id)
             except Listing.DoesNotExist:
                 return Response({"error": "Listing not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Enforce max_images_per_listing plan threshold
+        profile = getattr(request.user, 'agent_profile', None)
+        plan = profile.plan if profile else None
+        max_images = plan.max_images_per_listing if plan else 10
+        new_count = len(images) + len(image_urls)
+        if listing and max_images > 0:
+            existing_count = listing.images.count()
+            if existing_count + new_count > max_images:
+                plan_name = plan.name if plan else "Free Tier"
+                return Response({
+                    "error": f"You can only upload up to {max_images} photos per listing on the '{plan_name}'. This listing already has {existing_count} photos. Please upgrade to upload more."
+                }, status=status.HTTP_400_BAD_REQUEST)
 
         created_image_objs = []
         from urllib.parse import urlparse

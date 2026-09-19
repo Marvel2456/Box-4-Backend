@@ -15,9 +15,9 @@ class ListingAPITests(APITestCase):
         self.silver_plan = Plan.objects.create(
             name="Silver",
             price=9.99,
-            max_listings=3,
             max_boosted=1,
-            max_featured=1
+            max_featured=1,
+            max_images_per_listing=5
         )
         
         from agents.models import Category
@@ -167,12 +167,12 @@ class ListingAPITests(APITestCase):
         response = self.client.post(self.list_url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_listing_limit_enforced(self):
+    def test_listing_creation_has_no_artificial_cap(self):
         token = self.get_jwt_token("agent1@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
-        # Create maximum listings (limit is 3)
-        for i in range(3):
+        # Create multiple listings without max_listings cap
+        for i in range(5):
             Listing.objects.create(
                 agent=self.agent_user,
                 title=f"Listing {i}",
@@ -183,9 +183,9 @@ class ListingAPITests(APITestCase):
                 longitude=3.0
             )
 
-        # Attempt to create the 4th listing (should be rejected)
+        # Attempt to create another listing (should succeed since max_listings is removed)
         data = {
-            "title": "Over Limit Listing",
+            "title": "Sixth Listing",
             "category": str(self.cat_house.id),
             "price": "5000000.00",
             "address": "Address",
@@ -193,8 +193,8 @@ class ListingAPITests(APITestCase):
             "longitude": "3.000000"
         }
         response = self.client.post(self.list_url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("reached the maximum listing limit", response.data['non_field_errors'][0])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
 
     def test_partial_update_on_put_and_patch(self):
         # Create listing
@@ -262,13 +262,13 @@ class ListingAPITests(APITestCase):
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         self.assertTrue(response1.data['is_boosted'])
 
-        # Attempt to boost 2nd listing (should fail)
+        # Attempt to boost 2nd listing (should fail due to 1 limit)
         response2 = self.client.post(boost_url2)
         self.assertEqual(response2.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn("reached your plan limit", response2.data['error'])
+        self.assertIn("limit of 1", response2.data['error'])
 
         # Unboost 1st listing
-        unboost_response = self.client.post(boost_url1)
+        unboost_response = self.client.post(boost_url1, {"action": "unboost"})
         self.assertEqual(unboost_response.status_code, status.HTTP_200_OK)
         self.assertFalse(unboost_response.data['is_boosted'])
 
@@ -607,6 +607,96 @@ class ListingAPITests(APITestCase):
         state_results = res_state.data['results'] if 'results' in res_state.data else res_state.data
         self.assertEqual(len(state_results), 1)
         self.assertEqual(state_results[0]['title'], "Abuja Smart Duplex")
+
+    def test_agent_subscription_flow_and_quota_status(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Create a Gold Plan
+        gold_plan = Plan.objects.create(
+            name="Gold Agency",
+            price=49.99,
+            billing_cycle="monthly",
+            max_boosted=10,
+            max_featured=5,
+            max_images_per_listing=20,
+            has_verified_badge=True
+        )
+
+        # 2. List available plans
+        plans_res = self.client.get(reverse('agent-plans-list'))
+        self.assertEqual(plans_res.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(plans_res.data), 2)
+
+        # 3. Subscribe to Gold Agency Plan
+        sub_url = reverse('agent-subscription-subscribe')
+        sub_res = self.client.post(sub_url, {
+            "plan_id": str(gold_plan.id),
+            "payment_method": "paystack",
+            "transaction_reference": "TX-998877"
+        })
+        self.assertEqual(sub_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(sub_res.data['subscription']['plan_name'], "Gold Agency")
+
+        # 4. Check Current Subscription Status
+        status_url = reverse('agent-subscription-status')
+        status_res = self.client.get(status_url)
+        self.assertEqual(status_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(status_res.data['has_active_subscription'])
+        self.assertEqual(status_res.data['plan']['name'], "Gold Agency")
+        self.assertEqual(status_res.data['usage']['max_boosted'], 10)
+        self.assertEqual(status_res.data['usage']['max_featured'], 5)
+        self.assertEqual(status_res.data['usage']['max_images_per_listing'], 20)
+
+        # 5. Check Subscription Billing History
+        hist_url = reverse('agent-subscription-history')
+        hist_res = self.client.get(hist_url)
+        self.assertEqual(hist_res.status_code, status.HTTP_200_OK)
+        history_results = hist_res.data['results'] if 'results' in hist_res.data else hist_res.data
+        self.assertEqual(len(history_results), 1)
+        self.assertEqual(history_results[0]['plan_name'], "Gold Agency")
+
+        # 6. Cancel Subscription
+        cancel_url = reverse('agent-subscription-cancel')
+        cancel_res = self.client.post(cancel_url)
+        self.assertEqual(cancel_res.status_code, status.HTTP_200_OK)
+        self.agent_profile.refresh_from_db()
+        self.assertIsNone(self.agent_profile.plan)
+
+    def test_agent_pay_as_you_boost_custom_duration(self):
+        from profiles.models import BoostPlan, ListingBoostPlacement
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Admin creates a 14-day and a 30-day boost package
+        boost_14 = BoostPlan.objects.create(name="14 Days Mega Boost", duration_days=14, price=4500.00)
+        boost_30 = BoostPlan.objects.create(name="30 Days Ultra Boost", duration_days=30, price=8000.00)
+
+        # 2. Agent fetches available boost packages
+        boost_list_res = self.client.get(reverse('agent-boost-plans-list'))
+        self.assertEqual(boost_list_res.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(boost_list_res.data), 2)
+
+        # 3. Agent creates a listing and boosts it with the 14-day package
+        listing = Listing.objects.create(
+            agent=self.agent_user, title="Boostable Property", category=self.cat_house, price=5000000, address="Addr", latitude=6.0, longitude=3.0
+        )
+        boost_url = reverse('listing-boost', kwargs={'pk': listing.id})
+        boost_res = self.client.post(boost_url, {
+            "boost_plan_id": str(boost_14.id),
+            "payment_method": "card",
+            "payment_reference": "REF-BOOST-14"
+        })
+        self.assertEqual(boost_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(boost_res.data['is_boosted'])
+        self.assertEqual(boost_res.data['placement']['duration_days'], 14)
+        self.assertEqual(boost_res.data['placement']['boost_plan_name'], "14 Days Mega Boost")
+
+        # Verify DB placement
+        placement = ListingBoostPlacement.objects.filter(listing=listing, status='active').first()
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement.duration_days, 14)
+        self.assertEqual(placement.payment_reference, "REF-BOOST-14")
 
 
 

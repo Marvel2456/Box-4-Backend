@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 from agents.serializers import ListingSerializer
-from profiles.models import Plan, FeaturedPlan, ListingFeature, AgentSubscription
+from profiles.models import Plan, FeaturedPlan, ListingFeature, AgentSubscription, BoostPlan, ListingBoostPlacement
 
 User = get_user_model()
 
@@ -531,24 +531,54 @@ class ReportsModerationResponseSerializer(serializers.Serializer):
 
 class PlanManagementSerializer(serializers.ModelSerializer):
     subscribers_count = serializers.SerializerMethodField()
-    features = serializers.SerializerMethodField()
+    features = serializers.JSONField(required=False)
 
     class Meta:
         model = Plan
-        fields = ['id', 'name', 'price', 'max_listings', 'max_boosted', 'max_featured', 'subscribers_count', 'features', 'created_at']
+        fields = [
+            'id', 'name', 'description', 'price', 'billing_cycle',
+            'max_boosted', 'max_featured', 'max_images_per_listing',
+            'has_verified_badge',
+            'features', 'is_active', 'is_popular', 'subscribers_count',
+            'created_at', 'updated_at'
+        ]
 
     def get_subscribers_count(self, obj):
         return obj.agent_profiles.count()
 
-    def get_features(self, obj):
-        listings_str = "Unlimited listings" if obj.max_listings == 0 else f"Up to {obj.max_listings} listings"
-        res = [listings_str]
-        if obj.max_featured > 0:
-            res.append(f"{obj.max_featured} free featured/month")
-        else:
-            res.append("Basic analytics")
-        res.append("Priority support" if obj.price > 20 else "Email support")
-        return res
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get('features'):
+            features = []
+            if instance.max_boosted > 0:
+                features.append(f"Up to {instance.max_boosted} active boosted listings")
+            else:
+                features.append("Unlimited active boosted listings")
+            if instance.max_featured > 0:
+                features.append(f"{instance.max_featured} free featured listings/mo")
+            if instance.max_images_per_listing > 0:
+                features.append(f"Up to {instance.max_images_per_listing} photos per listing")
+            else:
+                features.append("Unlimited photos per listing")
+            if instance.has_verified_badge:
+                features.append("Verified Agent Badge")
+            data['features'] = features
+        return data
+
+
+class BoostPlanManagementSerializer(serializers.ModelSerializer):
+    active_placements_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BoostPlan
+        fields = [
+            'id', 'name', 'duration_days', 'price', 'description',
+            'features', 'is_active', 'active_placements_count',
+            'created_at', 'updated_at'
+        ]
+
+    def get_active_placements_count(self, obj):
+        return obj.placements.filter(status='active').count()
 
 
 class FeaturedPlanManagementSerializer(serializers.ModelSerializer):
@@ -556,10 +586,27 @@ class FeaturedPlanManagementSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FeaturedPlan
-        fields = ['id', 'name', 'duration_days', 'price', 'features', 'active_count', 'created_at']
+        fields = ['id', 'name', 'duration_days', 'price', 'features', 'is_active', 'active_count', 'created_at', 'updated_at']
 
     def get_active_count(self, obj):
         return obj.listing_features.filter(status='active').count()
+
+
+class AdminBoostPlacementItemSerializer(serializers.ModelSerializer):
+    listing_id = serializers.UUIDField(source='listing.id')
+    listing_title = serializers.CharField(source='listing.title')
+    agent_id = serializers.UUIDField(source='agent.id')
+    agent_name = serializers.CharField(source='agent.full_name')
+    agent_email = serializers.CharField(source='agent.email')
+    boost_plan_name = serializers.CharField(source='boost_plan.name', default='Custom Boost')
+
+    class Meta:
+        model = ListingBoostPlacement
+        fields = [
+            'id', 'listing_id', 'listing_title', 'agent_id', 'agent_name', 'agent_email',
+            'boost_plan', 'boost_plan_name', 'amount', 'duration_days', 'status',
+            'payment_reference', 'date_started', 'date_expires', 'created_at'
+        ]
 
 
 class FinanceHeaderStatsSerializer(serializers.Serializer):
