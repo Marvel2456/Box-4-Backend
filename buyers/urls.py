@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
-    BuyerPropertyViewSet, AgentViewSet, SavedListingViewSet,
+    BuyerPropertyViewSet, AgentViewSet, AgentSearchView, SavedListingViewSet,
     BuyerProfileDetailView, BuyerDashboardView
 )
 from agents.views import CategoryListView, TagListView
@@ -12,6 +12,7 @@ router.register(r'agents', AgentViewSet, basename='buyer-agents')
 router.register(r'saved', SavedListingViewSet, basename='buyer-saved')
 
 urlpatterns = [
+    path('agents/search/', AgentSearchView.as_view(), name='buyer-agent-search'),
     path('dashboard/', BuyerDashboardView.as_view(), name='buyer-dashboard'),
     path('profile/', BuyerProfileDetailView.as_view(), name='buyer-profile'),
     path('categories/', CategoryListView.as_view(), name='buyer-categories'),

@@ -67,8 +67,8 @@ class Listing(models.Model):
     city = models.CharField(max_length=250, blank=True, null=True, db_index=True)
     state = models.CharField(max_length=250, blank=True, null=True, db_index=True)
     country = models.CharField(max_length=250, default='Nigeria', blank=True, null=True)
-    latitude = models.DecimalField(max_digits=9, decimal_places=6)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    latitude = models.DecimalField(max_digits=18, decimal_places=15)
+    longitude = models.DecimalField(max_digits=18, decimal_places=15)
     
     # Features
     bedrooms = models.PositiveIntegerField(default=0)

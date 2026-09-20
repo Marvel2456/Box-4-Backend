@@ -47,18 +47,22 @@ class AgentListSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(source='agent_profile.phone_number', read_only=True, default=None)
     profile_picture = serializers.SerializerMethodField()
     agency_name = serializers.CharField(source='agent_profile.agency_name', read_only=True, default=None)
-    license_number = serializers.CharField(source='agent_profile.license_number', read_only=True, default=None)
+    is_verified = serializers.BooleanField(source='agent_profile.is_verified', read_only=True, default=False)
+    city = serializers.CharField(source='agent_profile.city', read_only=True, default=None)
+    state = serializers.CharField(source='agent_profile.state', read_only=True, default=None)
+    country = serializers.CharField(source='agent_profile.country', read_only=True, default=None)
     rating = serializers.SerializerMethodField()
     bio = serializers.CharField(source='agent_profile.bio', read_only=True, default=None)
     total_listings_count = serializers.SerializerMethodField()
+    distance_km = serializers.SerializerMethodField()
     date_joined = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = User
         fields = (
             'id', 'email', 'full_name', 'role', 'phone_number', 'profile_picture',
-            'agency_name', 'license_number', 'rating', 'bio', 'date_joined',
-            'total_listings_count'
+            'agency_name', 'is_verified', 'city', 'state', 'country',
+            'rating', 'bio', 'date_joined', 'total_listings_count', 'distance_km'
         )
 
     def get_profile_picture(self, obj):
@@ -76,6 +80,11 @@ class AgentListSerializer(serializers.ModelSerializer):
 
     def get_total_listings_count(self, obj):
         return Listing.objects.filter(agent=obj, is_published=True).count()
+
+    def get_distance_km(self, obj):
+        if hasattr(obj, 'distance_km') and obj.distance_km is not None:
+            return round(obj.distance_km, 2)
+        return None
 
 
 class AgentDetailSerializer(AgentListSerializer):

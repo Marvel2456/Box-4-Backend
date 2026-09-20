@@ -275,3 +275,111 @@ class BuyerAPITests(APITestCase):
         self.assertIn('top_locations', response.data)
         self.assertIsNotNone(response.data['user_location']['latitude'])
         self.assertIsNotNone(response.data['user_location']['profile_picture'])
+
+    def test_search_agents_by_keyword_and_location(self):
+        # Create second agent in Abuja
+        agent2 = User.objects.create_user(
+            email="abuja_agent@example.com",
+            username="abuja_agent@example.com",
+            password="securepassword123",
+            full_name="Abuja Prime Realtor",
+            role="agent"
+        )
+        agent2.agent_profile.agency_name = "Capital Prime Properties"
+        agent2.agent_profile.city = "Abuja"
+        agent2.agent_profile.state = "FCT"
+        agent2.agent_profile.country = "Nigeria"
+        agent2.agent_profile.rating = 4.9
+        agent2.agent_profile.is_verified = True
+        agent2.agent_profile.latitude = 9.076500
+        agent2.agent_profile.longitude = 7.398600
+        agent2.agent_profile.save()
+
+        search_url = reverse('buyer-agent-search')
+
+        # 1. Search by keyword matching agency name
+        res = self.client.get(search_url, {'search': 'Capital Prime'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data['results'] if 'results' in res.data else res.data
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['email'], "abuja_agent@example.com")
+        self.assertEqual(results[0]['agency_name'], "Capital Prime Properties")
+
+        # 2. Search by city filter
+        res_city = self.client.get(search_url, {'city': 'Abuja'})
+        self.assertEqual(res_city.status_code, status.HTTP_200_OK)
+        city_results = res_city.data['results'] if 'results' in res_city.data else res_city.data
+        self.assertEqual(len(city_results), 1)
+        self.assertEqual(city_results[0]['city'], "Abuja")
+
+    def test_search_agents_by_verification_and_min_rating(self):
+        # Create unverified agent with lower rating
+        unverified_agent = User.objects.create_user(
+            email="newbie@example.com",
+            username="newbie@example.com",
+            password="securepassword123",
+            full_name="Newbie Agent",
+            role="agent"
+        )
+        unverified_agent.agent_profile.rating = 2.5
+        unverified_agent.agent_profile.is_verified = False
+        unverified_agent.agent_profile.save()
+
+        search_url = reverse('buyer-agent-search')
+
+        # Filter only verified agents
+        res_ver = self.client.get(search_url, {'is_verified': 'true'})
+        self.assertEqual(res_ver.status_code, status.HTTP_200_OK)
+        ver_results = res_ver.data['results'] if 'results' in res_ver.data else res_ver.data
+        for agent in ver_results:
+            self.assertTrue(agent['is_verified'])
+
+        # Filter by min_rating 4.0
+        res_rating = self.client.get(search_url, {'min_rating': '4.0'})
+        self.assertEqual(res_rating.status_code, status.HTTP_200_OK)
+        rating_results = res_rating.data['results'] if 'results' in res_rating.data else res_rating.data
+        for agent in rating_results:
+            self.assertGreaterEqual(agent['rating'], 4.0)
+
+    def test_search_agents_response_does_not_contain_coordinates_or_license_number(self):
+        search_url = reverse('buyer-agent-search')
+        res = self.client.get(search_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data['results'] if 'results' in res.data else res.data
+        self.assertGreaterEqual(len(results), 1)
+        first_agent = results[0]
+
+        # Verify excluded fields
+        self.assertNotIn('latitude', first_agent)
+        self.assertNotIn('longitude', first_agent)
+        self.assertNotIn('license_number', first_agent)
+
+        # Verify expected fields
+        self.assertIn('id', first_agent)
+        self.assertIn('full_name', first_agent)
+        self.assertIn('email', first_agent)
+        self.assertIn('agency_name', first_agent)
+        self.assertIn('is_verified', first_agent)
+        self.assertIn('rating', first_agent)
+        self.assertIn('total_listings_count', first_agent)
+
+    def test_search_agents_proximity_and_sorting(self):
+        # Set agent location in Lekki (6.4281, 3.4219)
+        self.agent_user.agent_profile.latitude = 6.428100
+        self.agent_user.agent_profile.longitude = 3.421900
+        self.agent_user.agent_profile.city = "Lekki"
+        self.agent_user.agent_profile.save()
+
+        # Buyer coordinates in Victoria Island (6.4253, 3.4219) (~ 0.3 km away)
+        search_url = reverse('buyer-agent-search')
+        res = self.client.get(search_url, {
+            'lat': 6.4253,
+            'lng': 3.4219,
+            'sort_by': 'nearest'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        results = res.data['results'] if 'results' in res.data else res.data
+        self.assertGreaterEqual(len(results), 1)
+        self.assertIsNotNone(results[0]['distance_km'])
+        self.assertNotIn('latitude', results[0])
+        self.assertNotIn('longitude', results[0])

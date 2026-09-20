@@ -110,6 +110,25 @@ class ListingAPITests(APITestCase):
         # Verify DB entry
         self.assertEqual(Listing.objects.filter(agent=self.agent_user).count(), 1)
 
+    def test_create_listing_high_precision_coordinates(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        data = {
+            "title": "GPS Precision Penthouse",
+            "category": "apartment",
+            "price": "25000000.00",
+            "address": "Victoria Island, Lagos",
+            "latitude": "6.428123456789123",
+            "longitude": "3.421987654321987",
+            "bedrooms": 3,
+            "bathrooms": 3
+        }
+        response = self.client.post(self.list_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(float(response.data['latitude']), 6.428123456789123)
+        self.assertEqual(float(response.data['longitude']), 3.421987654321987)
+
     def test_create_listing_with_image_urls(self):
         token = self.get_jwt_token("agent1@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')

@@ -190,6 +190,151 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+class AgentSearchView(generics.ListAPIView):
+    """
+    Search and filter real estate agents by keyword, location, verification status, rating, and proximity.
+    """
+    permission_classes = [permissions.AllowAny]
+    serializer_class = AgentListSerializer
+
+    @swagger_auto_schema(
+        operation_description="Search agents by keyword (name, email, agency, city, state, bio), location, verification, rating, and coordinates.",
+        manual_parameters=[
+            openapi.Parameter('search', openapi.IN_QUERY, description="Keyword search across agent name, agency, city, state, bio, email", type=openapi.TYPE_STRING),
+            openapi.Parameter('q', openapi.IN_QUERY, description="Alias for search parameter", type=openapi.TYPE_STRING),
+            openapi.Parameter('city', openapi.IN_QUERY, description="Filter by city", type=openapi.TYPE_STRING),
+            openapi.Parameter('state', openapi.IN_QUERY, description="Filter by state", type=openapi.TYPE_STRING),
+            openapi.Parameter('country', openapi.IN_QUERY, description="Filter by country", type=openapi.TYPE_STRING),
+            openapi.Parameter('is_verified', openapi.IN_QUERY, description="Filter verified agents (true/false)", type=openapi.TYPE_BOOLEAN),
+            openapi.Parameter('min_rating', openapi.IN_QUERY, description="Minimum agent rating e.g. 4.0", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('has_listings', openapi.IN_QUERY, description="Filter agents who have active published listings (true/false)", type=openapi.TYPE_BOOLEAN),
+            openapi.Parameter('lat', openapi.IN_QUERY, description="Buyer latitude for proximity calculation", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('lng', openapi.IN_QUERY, description="Buyer longitude for proximity calculation", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('radius_km', openapi.IN_QUERY, description="Optional max radius in kilometers from buyer coordinates", type=openapi.TYPE_NUMBER),
+            openapi.Parameter('sort_by', openapi.IN_QUERY, description="Sorting: top_rated, nearest, most_listings, newest, name_asc, name_desc", type=openapi.TYPE_STRING),
+        ],
+        responses={200: AgentListSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        queryset = User.objects.filter(role='agent').select_related('agent_profile').annotate(
+            active_listings_count=Count('listings', filter=Q(listings__is_published=True, listings__status='active'))
+        )
+
+        # 1. Keyword search across Name, Email, Agency, City, State, Country, Bio (no license_number)
+        query = request.query_params.get('search') or request.query_params.get('q')
+        if query:
+            query = query.strip()
+            queryset = queryset.filter(
+                Q(full_name__icontains=query) |
+                Q(email__icontains=query) |
+                Q(agent_profile__agency_name__icontains=query) |
+                Q(agent_profile__city__icontains=query) |
+                Q(agent_profile__state__icontains=query) |
+                Q(agent_profile__country__icontains=query) |
+                Q(agent_profile__bio__icontains=query)
+            ).distinct()
+
+        # 2. Location filters
+        city = request.query_params.get('city')
+        if city:
+            queryset = queryset.filter(agent_profile__city__icontains=city.strip())
+
+        state = request.query_params.get('state')
+        if state:
+            queryset = queryset.filter(agent_profile__state__icontains=state.strip())
+
+        country = request.query_params.get('country')
+        if country:
+            queryset = queryset.filter(agent_profile__country__icontains=country.strip())
+
+        # 3. Verification status
+        is_verified = request.query_params.get('is_verified')
+        if is_verified is not None:
+            val = is_verified.lower() in ['true', '1', 'yes']
+            queryset = queryset.filter(agent_profile__is_verified=val)
+
+        # 4. Rating filter
+        min_rating = request.query_params.get('min_rating')
+        if min_rating:
+            try:
+                queryset = queryset.filter(agent_profile__rating__gte=float(min_rating))
+            except (ValueError, TypeError):
+                pass
+
+        # 5. Has active listings
+        has_listings = request.query_params.get('has_listings')
+        if has_listings is not None:
+            if has_listings.lower() in ['true', '1', 'yes']:
+                queryset = queryset.filter(active_listings_count__gt=0)
+
+        # 6. Proximity / Coordinates Calculation
+        lat_param = request.query_params.get('lat') or request.query_params.get('latitude')
+        lng_param = request.query_params.get('lng') or request.query_params.get('longitude')
+        radius_km = request.query_params.get('radius_km')
+
+        buyer_coords = None
+        if lat_param and lng_param:
+            try:
+                buyer_coords = (float(lat_param), float(lng_param))
+            except (ValueError, TypeError):
+                pass
+
+        agents_list = list(queryset)
+
+        if buyer_coords:
+            filtered_by_dist = []
+            for agent in agents_list:
+                prof = getattr(agent, 'agent_profile', None)
+                if prof and prof.latitude is not None and prof.longitude is not None:
+                    try:
+                        agent_coords = (float(prof.latitude), float(prof.longitude))
+                        dist = geodesic(buyer_coords, agent_coords).km
+                        agent.distance_km = dist
+                    except Exception:
+                        agent.distance_km = None
+                else:
+                    agent.distance_km = None
+
+                # Radius filtering
+                if radius_km:
+                    try:
+                        if agent.distance_km is not None and agent.distance_km <= float(radius_km):
+                            filtered_by_dist.append(agent)
+                    except (ValueError, TypeError):
+                        filtered_by_dist.append(agent)
+                else:
+                    filtered_by_dist.append(agent)
+            agents_list = filtered_by_dist
+
+        # 7. Sorting / Ordering
+        sort_by = request.query_params.get('sort_by') or request.query_params.get('ordering')
+        if sort_by in ['nearest', 'distance'] and buyer_coords:
+            agents_list.sort(key=lambda a: (a.distance_km is None, a.distance_km or 0))
+        elif sort_by in ['most_listings', '-listings']:
+            agents_list.sort(key=lambda a: getattr(a, 'active_listings_count', 0), reverse=True)
+        elif sort_by in ['newest', '-date_joined']:
+            agents_list.sort(key=lambda a: a.date_joined, reverse=True)
+        elif sort_by in ['name_asc', 'name']:
+            agents_list.sort(key=lambda a: (a.full_name or '').lower())
+        elif sort_by in ['name_desc', '-name']:
+            agents_list.sort(key=lambda a: (a.full_name or '').lower(), reverse=True)
+        else:
+            # Default sort: Highest rating, then verified, then newest
+            agents_list.sort(key=lambda a: (
+                float(getattr(a.agent_profile, 'rating', 0) or 0) if hasattr(a, 'agent_profile') else 0,
+                bool(getattr(a.agent_profile, 'is_verified', False)) if hasattr(a, 'agent_profile') else False
+            ), reverse=True)
+
+        # 8. Pagination
+        page = self.paginate_queryset(agents_list)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(agents_list, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 class AgentViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = User.objects.filter(role='agent').order_by('-agent_profile__rating')
     permission_classes = [permissions.AllowAny]
@@ -198,6 +343,11 @@ class AgentViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == 'list':
             return AgentListSerializer
         return AgentDetailSerializer
+
+    @action(detail=False, methods=['get'])
+    def search(self, request, *args, **kwargs):
+        view = AgentSearchView.as_view()
+        return view(request._request, *args, **kwargs)
 
 
 class SavedListingViewSet(viewsets.ModelViewSet):

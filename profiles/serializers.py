@@ -88,8 +88,8 @@ class AdminProfileSerializer(BaseProfileSerializer):
 
 
 class BuyerProfileOnboardingSerializer(serializers.ModelSerializer):
-    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
-    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    latitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
+    longitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
     phone_number = serializers.CharField(required=True)
     profile_picture = FlexibleImageField(required=False, allow_null=True)
 
@@ -99,8 +99,8 @@ class BuyerProfileOnboardingSerializer(serializers.ModelSerializer):
 
 
 class AgentProfileOnboardingSerializer(serializers.ModelSerializer):
-    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
-    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    latitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
+    longitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
     phone_number = serializers.CharField(required=True)
     profile_picture = FlexibleImageField(required=False, allow_null=True)
 
