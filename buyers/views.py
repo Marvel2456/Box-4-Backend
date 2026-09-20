@@ -1,7 +1,7 @@
 from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Q, Count, Avg
+from django.db.models import Q, Count, Avg, F
 from django.contrib.auth import get_user_model
 import math
 from geopy.distance import geodesic
@@ -9,9 +9,10 @@ from geopy.distance import geodesic
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .models import SavedListing
+from .models import SavedListing, ListingView
 from .serializers import (
-    SavedListingSerializer, SavedListingCreateSerializer, AgentListSerializer,
+    SavedListingSerializer, SavedListingCreateSerializer,
+    ListingViewCreateSerializer, AgentListSerializer,
     AgentDetailSerializer, BuyerDashboardSerializer
 )
 from agents.models import Listing
@@ -188,6 +189,11 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
 
         serializer = self.get_serializer(ads, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='view')
+    def record_view(self, request, *args, **kwargs):
+        view = ListingViewCreateView.as_view()
+        return view(request._request, *args, **kwargs)
 
 
 class AgentSearchView(generics.ListAPIView):
@@ -414,6 +420,51 @@ class SavedListingViewSet(viewsets.ModelViewSet):
 
         saved.delete()
         return Response({"message": "Listing removed from saved properties successfully."}, status=status.HTTP_200_OK)
+
+
+class ListingViewCreateView(generics.GenericAPIView):
+    """
+    Record a buyer viewing a property listing.
+    Prevents duplicate views from the same buyer on the same listing.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingViewCreateSerializer
+
+    @swagger_auto_schema(
+        operation_description="Record a unique property view for the authenticated buyer.",
+        request_body=ListingViewCreateSerializer,
+        responses={
+            201: "Listing view recorded successfully.",
+            200: "Listing already viewed by this buyer."
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        listing = serializer.validated_data['listing_id']
+        buyer = request.user
+
+        view_instance, created = ListingView.objects.get_or_create(
+            buyer=buyer,
+            listing=listing
+        )
+
+        if created:
+            Listing.objects.filter(id=listing.id).update(views_count=F('views_count') + 1)
+            listing.refresh_from_db(fields=['views_count'])
+            return Response({
+                "message": "Listing view recorded successfully.",
+                "created": True,
+                "listing_id": str(listing.id),
+                "views_count": listing.views_count
+            }, status=status.HTTP_201_CREATED)
+
+        return Response({
+            "message": "Listing already viewed by this buyer.",
+            "created": False,
+            "listing_id": str(listing.id),
+            "views_count": listing.views_count
+        }, status=status.HTTP_200_OK)
 
 
 class BuyerDashboardView(generics.GenericAPIView):

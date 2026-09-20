@@ -13,6 +13,8 @@ from .views import (
     TagListView,
     AgentKYCVerifyView,
     AgentKYCStatusView,
+    AgentListingViewsDetailView,
+    AgentListingsViewsSummaryView
 )
 from .subscription_views import (
     AgentPlanListView,
@@ -54,4 +56,6 @@ urlpatterns = [
     path('properties/<uuid:pk>/', ListingDetailView.as_view(), name='listing-detail'),
     path('properties/<uuid:pk>/boost/', ListingBoostView.as_view(), name='listing-boost'),
     path('properties/<uuid:pk>/feature/', ListingFeatureView.as_view(), name='listing-feature'),
+    path('properties/<uuid:pk>/views/', AgentListingViewsDetailView.as_view(), name='agent-listing-views-tracker'),
+    path('properties/views-summary/', AgentListingsViewsSummaryView.as_view(), name='agent-listings-views-summary'),
 ]

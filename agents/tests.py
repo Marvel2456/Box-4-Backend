@@ -129,6 +129,28 @@ class ListingAPITests(APITestCase):
         self.assertEqual(float(response.data['latitude']), 6.428123456789123)
         self.assertEqual(float(response.data['longitude']), 3.421987654321987)
 
+    def test_create_listing_no_trailing_zeros_in_coordinates(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        data = {
+            "title": "Short Decimals Property",
+            "category": "apartment",
+            "price": "18000000.00",
+            "address": "Benin City, Edo",
+            "latitude": "6.38344",
+            "longitude": "5.6113",
+            "bedrooms": 2,
+            "bathrooms": 2
+        }
+        response = self.client.post(self.list_url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # Assert clean numeric output without trailing zeroes
+        self.assertEqual(response.data['latitude'], 6.38344)
+        self.assertEqual(response.data['longitude'], 5.6113)
+        self.assertNotEqual(str(response.data['latitude']), "6.383440000000000")
+        self.assertNotEqual(str(response.data['longitude']), "5.611300000000000")
+
     def test_create_listing_with_image_urls(self):
         token = self.get_jwt_token("agent1@example.com", "securepassword123")
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
@@ -716,6 +738,52 @@ class ListingAPITests(APITestCase):
         self.assertIsNotNone(placement)
         self.assertEqual(placement.duration_days, 14)
         self.assertEqual(placement.payment_reference, "REF-BOOST-14")
+
+    def test_agent_listing_views_numbers_and_summary(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        from buyers.models import ListingView
+
+        # Create two listings for agent
+        listing1 = Listing.objects.create(
+            agent=self.agent_user, title="View Tracked Listing 1", category=self.cat_house, price=10000000, address="Addr 1", latitude=6.0, longitude=3.0
+        )
+        listing2 = Listing.objects.create(
+            agent=self.agent_user, title="View Tracked Listing 2", category=self.cat_house, price=15000000, address="Addr 2", latitude=6.0, longitude=3.0
+        )
+
+        # Buyer views listing 1
+        ListingView.objects.create(buyer=self.buyer_user, listing=listing1)
+        listing1.views_count = 1
+        listing1.save()
+
+        # 1. Test single listing views numbers endpoint
+        detail_view_url = reverse('agent-listing-views-tracker', kwargs={'pk': listing1.id})
+        res = self.client.get(detail_view_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['listing_id'], str(listing1.id))
+        self.assertEqual(res.data['title'], "View Tracked Listing 1")
+        self.assertEqual(res.data['total_views'], 1)
+        self.assertEqual(res.data['views_today'], 1)
+        self.assertEqual(res.data['views_this_week'], 1)
+        self.assertEqual(res.data['views_this_month'], 1)
+        # Ensure no buyer personal info is exposed in response
+        self.assertNotIn('buyers', res.data)
+        self.assertNotIn('viewers', res.data)
+
+        # 2. Test overall agent views summary endpoint
+        summary_url = reverse('agent-listings-views-summary')
+        sum_res = self.client.get(summary_url)
+        self.assertEqual(sum_res.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(sum_res.data['total_properties'], 2)
+        self.assertGreaterEqual(sum_res.data['total_views'], 1)
+        self.assertEqual(sum_res.data['views_today'], 1)
+        self.assertGreaterEqual(len(sum_res.data['properties']), 2)
+        # Verify property items in summary contain view counts only
+        for prop in sum_res.data['properties']:
+            self.assertIn('views_count', prop)
+            self.assertNotIn('buyers', prop)
 
 
 

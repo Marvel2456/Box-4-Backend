@@ -24,3 +24,28 @@ class SavedListing(models.Model):
 
     def __str__(self):
         return f"{self.buyer.email} saved {self.listing.title}"
+
+
+class ListingView(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    buyer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='listing_views',
+        limit_choices_to={'role': 'buyer'}
+    )
+    listing = models.ForeignKey(
+        Listing,
+        on_delete=models.CASCADE,
+        related_name='views_history'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('buyer', 'listing')
+        ordering = ['-created_at']
+        verbose_name = "Listing View"
+        verbose_name_plural = "Listing Views"
+
+    def __str__(self):
+        return f"{self.buyer.email} viewed {self.listing.title}"

@@ -383,3 +383,42 @@ class BuyerAPITests(APITestCase):
         self.assertIsNotNone(results[0]['distance_km'])
         self.assertNotIn('latitude', results[0])
         self.assertNotIn('longitude', results[0])
+
+    def test_buyer_record_listing_view_and_deduplication(self):
+        token = self.get_jwt_token("buyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        from buyers.models import ListingView
+
+        # Initial state: 0 views
+        self.assertEqual(self.listing_a.views_count, 0)
+        self.assertEqual(ListingView.objects.filter(listing=self.listing_a).count(), 0)
+
+        view_url = reverse('buyer-record-view')
+
+        # 1. First View -> Should create view instance and increment views_count
+        res1 = self.client.post(view_url, {"listing_id": str(self.listing_a.id)})
+        self.assertEqual(res1.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res1.data['created'])
+        self.assertEqual(res1.data['views_count'], 1)
+        self.listing_a.refresh_from_db()
+        self.assertEqual(self.listing_a.views_count, 1)
+        self.assertEqual(ListingView.objects.filter(buyer=self.buyer_user, listing=self.listing_a).count(), 1)
+
+        # 2. Duplicate View -> Same buyer requests again -> Should NOT duplicate or increment count
+        res2 = self.client.post(view_url, {"listing_id": str(self.listing_a.id)})
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertFalse(res2.data['created'])
+        self.assertEqual(res2.data['views_count'], 1)
+        self.listing_a.refresh_from_db()
+        self.assertEqual(self.listing_a.views_count, 1)
+        self.assertEqual(ListingView.objects.filter(buyer=self.buyer_user, listing=self.listing_a).count(), 1)
+
+        # 3. Test alternate route 'properties/view/'
+        alt_view_url = reverse('buyer-property-view')
+        res3 = self.client.post(alt_view_url, {"id": str(self.listing_b.id)})
+        self.assertEqual(res3.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res3.data['created'])
+        self.assertEqual(res3.data['views_count'], 1)
+        self.listing_b.refresh_from_db()
+        self.assertEqual(self.listing_b.views_count, 1)

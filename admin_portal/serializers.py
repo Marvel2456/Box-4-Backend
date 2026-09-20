@@ -153,14 +153,16 @@ class OverviewDashboardResponseSerializer(serializers.Serializer):
     pending_approvals = OverviewListingItemSerializer(many=True)
 
 
+from core.serializers import CoordinateField
+
 class AdminPropertyDetailSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     title = serializers.CharField()
     category = serializers.CharField()
     price = serializers.DecimalField(max_digits=12, decimal_places=2)
     address = serializers.CharField()
-    latitude = serializers.DecimalField(max_digits=18, decimal_places=15)
-    longitude = serializers.DecimalField(max_digits=18, decimal_places=15)
+    latitude = CoordinateField()
+    longitude = CoordinateField()
     bedrooms = serializers.IntegerField()
     bathrooms = serializers.IntegerField()
     balconies = serializers.IntegerField()

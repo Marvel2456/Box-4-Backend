@@ -2,8 +2,10 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Listing, ListingImage, Category, Tag
 from profiles.models import AgentProfile
+from core.serializers import CoordinateField
 
 User = get_user_model()
+
 
 class CategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -40,6 +42,8 @@ class ListingSerializer(serializers.ModelSerializer):
     images = ListingImageSerializer(many=True, read_only=True)
     cover_photo = serializers.SerializerMethodField()
     inquiries_count = serializers.SerializerMethodField()
+    latitude = CoordinateField()
+    longitude = CoordinateField()
     cover_photo_url = serializers.CharField(
         write_only=True,
         required=False,
@@ -355,4 +359,37 @@ class AgentKYCSerializer(serializers.ModelSerializer):
             'failure_reason', 'submitted_at', 'verified_at', 'created_at', 'updated_at'
         )
         read_only_fields = fields
+
+
+class ListingViewMetricsSerializer(serializers.Serializer):
+    listing_id = serializers.UUIDField()
+    title = serializers.CharField()
+    price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    cover_photo = serializers.CharField(allow_null=True)
+    status = serializers.CharField()
+    total_views = serializers.IntegerField()
+    views_today = serializers.IntegerField()
+    views_this_week = serializers.IntegerField()
+    views_this_month = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
+
+
+class ListingViewItemSummarySerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    title = serializers.CharField()
+    price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    cover_photo = serializers.CharField(allow_null=True)
+    status = serializers.CharField()
+    views_count = serializers.IntegerField()
+    created_at = serializers.DateTimeField()
+
+
+class AgentListingsViewsSummarySerializer(serializers.Serializer):
+    total_properties = serializers.IntegerField()
+    total_views = serializers.IntegerField()
+    views_today = serializers.IntegerField()
+    views_this_week = serializers.IntegerField()
+    views_this_month = serializers.IntegerField()
+    most_viewed_properties = ListingViewItemSummarySerializer(many=True)
+    properties = ListingViewItemSummarySerializer(many=True)
 

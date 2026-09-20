@@ -16,7 +16,9 @@ from .serializers import (
     CategorySerializer,
     TagSerializer,
     AgentKYCSubmitSerializer,
-    AgentKYCSerializer
+    AgentKYCSerializer,
+    ListingViewMetricsSerializer,
+    AgentListingsViewsSummarySerializer
 )
 from profiles.models import AgentProfile, AgentKYC, BoostPlan, ListingBoostPlacement
 from profiles.serializers import AgentProfileSerializer
@@ -717,4 +719,121 @@ class AgentKYCStatusView(generics.GenericAPIView):
         kyc, _ = AgentKYC.objects.get_or_create(agent_profile=profile)
 
         return Response(AgentKYCSerializer(kyc, context={'request': request}).data, status=status.HTTP_200_OK)
+
+
+class AgentListingViewsDetailView(generics.GenericAPIView):
+    """
+    Get numerical view metrics for a specific listing owned by the agent.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ListingViewMetricsSerializer
+
+    @swagger_auto_schema(
+        operation_description="Get unique buyer view counts (total, today, this week, this month) for a specific listing.",
+        responses={200: ListingViewMetricsSerializer()}
+    )
+    def get(self, request, pk, *args, **kwargs):
+        user = request.user
+        listing = Listing.objects.filter(id=pk, agent=user).first()
+        if not listing:
+            return Response({"error": "Listing not found or not owned by you."}, status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_ago = now - timedelta(days=7)
+        month_ago = now - timedelta(days=30)
+
+        views_qs = listing.views_history.all()
+        views_today = views_qs.filter(created_at__gte=today_start).count()
+        views_this_week = views_qs.filter(created_at__gte=week_ago).count()
+        views_this_month = views_qs.filter(created_at__gte=month_ago).count()
+
+        cover = None
+        cover_img = listing.images.filter(is_cover=True).first() or listing.images.first()
+        if cover_img and cover_img.image:
+            try:
+                cover = request.build_absolute_uri(cover_img.image.url)
+            except Exception:
+                cover = str(cover_img.image)
+
+        data = {
+            "listing_id": str(listing.id),
+            "title": listing.title,
+            "price": listing.price,
+            "cover_photo": cover,
+            "status": listing.status,
+            "total_views": listing.views_count,
+            "views_today": views_today,
+            "views_this_week": views_this_week,
+            "views_this_month": views_this_month,
+            "created_at": listing.created_at
+        }
+        return Response(data, status=status.HTTP_200_OK)
+
+
+class AgentListingsViewsSummaryView(generics.GenericAPIView):
+    """
+    Get aggregated view metrics across all listings owned by the agent.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = AgentListingsViewsSummarySerializer
+
+    @swagger_auto_schema(
+        operation_description="Get aggregated numerical view statistics across all listings owned by the agent.",
+        responses={200: AgentListingsViewsSummarySerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        if user.role != 'agent':
+            return Response({"error": "Only agent accounts can access listing view analytics."}, status=status.HTTP_403_FORBIDDEN)
+
+        now = timezone.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week_ago = now - timedelta(days=7)
+        month_ago = now - timedelta(days=30)
+
+        from buyers.models import ListingView
+        user_listings = Listing.objects.filter(agent=user).prefetch_related('images').order_by('-views_count', '-created_at')
+
+        total_properties = user_listings.count()
+        total_views = user_listings.aggregate(total=Sum('views_count'))['total'] or 0
+
+        # Periodic counts across all user's listings
+        agent_views_qs = ListingView.objects.filter(listing__agent=user)
+        views_today = agent_views_qs.filter(created_at__gte=today_start).count()
+        views_this_week = agent_views_qs.filter(created_at__gte=week_ago).count()
+        views_this_month = agent_views_qs.filter(created_at__gte=month_ago).count()
+
+        properties_list = []
+        for l in user_listings:
+            cover = None
+            c_img = l.images.filter(is_cover=True).first() or l.images.first()
+            if c_img and c_img.image:
+                try:
+                    cover = request.build_absolute_uri(c_img.image.url)
+                except Exception:
+                    cover = str(c_img.image)
+
+            properties_list.append({
+                "id": str(l.id),
+                "title": l.title,
+                "price": l.price,
+                "cover_photo": cover,
+                "status": l.status,
+                "views_count": l.views_count,
+                "created_at": l.created_at
+            })
+
+        most_viewed = sorted(properties_list, key=lambda x: x['views_count'], reverse=True)[:5]
+
+        data = {
+            "total_properties": total_properties,
+            "total_views": total_views,
+            "views_today": views_today,
+            "views_this_week": views_this_week,
+            "views_this_month": views_this_month,
+            "most_viewed_properties": most_viewed,
+            "properties": properties_list
+        }
+        return Response(data, status=status.HTTP_200_OK)
 

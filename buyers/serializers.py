@@ -1,10 +1,29 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import SavedListing
+from .models import SavedListing, ListingView
 from agents.models import Listing
 from agents.serializers import ListingSerializer
 
 User = get_user_model()
+
+
+class ListingViewCreateSerializer(serializers.Serializer):
+    listing_id = serializers.UUIDField(required=True, help_text="UUID of the property listing viewed by the buyer.")
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            mutable_data = data.copy()
+            target_id = mutable_data.get('listing_id') or mutable_data.get('listing') or mutable_data.get('id')
+            if target_id:
+                mutable_data['listing_id'] = target_id
+            return super().to_internal_value(mutable_data)
+        return super().to_internal_value(data)
+
+    def validate_listing_id(self, value):
+        try:
+            return Listing.objects.get(pk=value)
+        except Listing.DoesNotExist:
+            raise serializers.ValidationError("Property listing not found.")
 
 
 class SavedListingCreateSerializer(serializers.Serializer):

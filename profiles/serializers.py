@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import BuyerProfile, AgentProfile, AdminProfile
-from core.serializers import FlexibleImageField
+from core.serializers import FlexibleImageField, CoordinateField
 
 User = get_user_model()
 
@@ -30,6 +30,8 @@ class BaseProfileSerializer(serializers.ModelSerializer):
 
 class BuyerProfileSerializer(BaseProfileSerializer):
     profile_picture = FlexibleImageField(required=False, allow_null=True)
+    latitude = CoordinateField(required=False, allow_null=True)
+    longitude = CoordinateField(required=False, allow_null=True)
 
     class Meta:
         model = BuyerProfile
@@ -51,6 +53,8 @@ class AgentProfileSerializer(BaseProfileSerializer):
     profile_picture = FlexibleImageField(required=False, allow_null=True)
     kyc_status = serializers.CharField(read_only=True)
     is_verified = serializers.BooleanField(read_only=True)
+    latitude = CoordinateField(required=False, allow_null=True)
+    longitude = CoordinateField(required=False, allow_null=True)
 
     class Meta:
         model = AgentProfile
@@ -88,8 +92,8 @@ class AdminProfileSerializer(BaseProfileSerializer):
 
 
 class BuyerProfileOnboardingSerializer(serializers.ModelSerializer):
-    latitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
-    longitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
+    latitude = CoordinateField(required=True)
+    longitude = CoordinateField(required=True)
     phone_number = serializers.CharField(required=True)
     profile_picture = FlexibleImageField(required=False, allow_null=True)
 
@@ -99,8 +103,8 @@ class BuyerProfileOnboardingSerializer(serializers.ModelSerializer):
 
 
 class AgentProfileOnboardingSerializer(serializers.ModelSerializer):
-    latitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
-    longitude = serializers.DecimalField(max_digits=18, decimal_places=15, required=True)
+    latitude = CoordinateField(required=True)
+    longitude = CoordinateField(required=True)
     phone_number = serializers.CharField(required=True)
     profile_picture = FlexibleImageField(required=False, allow_null=True)
 
