@@ -2,13 +2,15 @@ import requests
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.utils import timezone
-from rest_framework import status, views, generics
+from rest_framework import status, views, generics, permissions
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from .models import EmailOTP
 from .serializers import (
@@ -18,7 +20,8 @@ from .serializers import (
     OTPResendSerializer,
     GoogleAuthSerializer,
     ForgotPasswordSerializer,
-    ResetPasswordSerializer
+    ResetPasswordSerializer,
+    DeleteAccountSerializer
 )
 
 User = get_user_model()
@@ -153,23 +156,34 @@ class GoogleAuthView(generics.GenericAPIView):
             full_name = f"{given_name} {family_name}".strip()
         
         # Check if user already exists
-        user, created = User.objects.get_or_create(
-            email=email,
-            defaults={
-                'username': email,
-                'full_name': full_name,
-                'role': role,
-                'is_email_verified': True # Google verified emails are trusted
-            }
-        )
-        
-        # If user was created, set a random password
-        if created:
+        existing_user = User.objects.filter(email=email).first()
+        if existing_user:
+            if getattr(existing_user, 'is_deleted', False) or not existing_user.is_active:
+                return Response(
+                    {"error": "This account has been deleted or deactivated. Please contact support."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            if getattr(existing_user, 'is_suspended', False):
+                return Response(
+                    {"error": "This account has been suspended. Please contact support."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            user = existing_user
+            created = False
+        else:
+            user = User.objects.create(
+                email=email,
+                username=email,
+                full_name=full_name,
+                role=role,
+                is_email_verified=True # Google verified emails are trusted
+            )
             user.set_unusable_password()
             user.save()
-        else:
-            # If user already exists, we do NOT change their role, they log in with existing role
-            # However, we make sure they are marked as email verified since Google authenticated them
+            created = True
+        
+        if not created:
+            # Make sure they are marked as email verified since Google authenticated them
             if not user.is_email_verified:
                 user.is_email_verified = True
                 user.save()
@@ -237,5 +251,43 @@ class ResetPasswordView(generics.GenericAPIView):
         
         return Response({
             "message": "Password has been reset successfully. You can now login with your new password."
+        }, status=status.HTTP_200_OK)
+
+
+class DeleteAccountView(generics.GenericAPIView):
+    serializer_class = DeleteAccountSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=DeleteAccountSerializer,
+        responses={200: openapi.Response(description="Account deleted successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        return self._perform_delete(request)
+
+    @swagger_auto_schema(
+        request_body=DeleteAccountSerializer,
+        responses={200: openapi.Response(description="Account deleted successfully")}
+    )
+    def delete(self, request, *args, **kwargs):
+        return self._perform_delete(request)
+
+    def _perform_delete(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        user.is_deleted = True
+        user.is_active = False
+        user.deleted_at = timezone.now()
+        user.save()
+
+        # If user is an agent, unpublish and deactivate all their listings
+        if user.role == 'agent':
+            from agents.models import Listing
+            Listing.objects.filter(agent=user).update(is_published=False, status='inactive')
+
+        return Response({
+            "message": "Your account has been deleted successfully. You will no longer be able to log in."
         }, status=status.HTTP_200_OK)
 

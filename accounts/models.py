@@ -40,6 +40,8 @@ class User(AbstractUser):
     is_email_verified = models.BooleanField(default=False)
     must_change_password = models.BooleanField(default=False)
     is_suspended = models.BooleanField(default=False)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
     
     # Use email as the username field
     email = models.EmailField(unique=True)

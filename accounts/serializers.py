@@ -24,6 +24,13 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             attrs['username'] = attrs['username'].strip().lower()
 
         data = super().validate(attrs)
+        
+        if getattr(self.user, 'is_deleted', False) or not self.user.is_active:
+            raise serializers.ValidationError("This account has been deleted or deactivated.")
+            
+        if getattr(self.user, 'is_suspended', False):
+            raise serializers.ValidationError("This account has been suspended. Please contact support.")
+
         data['role'] = self.user.role
         data['id'] = self.user.id
         data['email'] = self.user.email
@@ -89,6 +96,9 @@ class OTPVerifySerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
 
+        if getattr(user, 'is_deleted', False) or not user.is_active:
+            raise serializers.ValidationError("This account has been deleted or deactivated.")
+
         otp_record = EmailOTP.objects.filter(
             user=user, 
             otp_code=otp_code, 
@@ -116,6 +126,8 @@ class OTPResendSerializer(serializers.Serializer):
             self.user = User.objects.get(email__iexact=value)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
+        if getattr(self.user, 'is_deleted', False) or not self.user.is_active:
+            raise serializers.ValidationError("This account has been deleted or deactivated.")
         return value
 
 
@@ -133,6 +145,8 @@ class ForgotPasswordSerializer(serializers.Serializer):
             self.user = User.objects.get(email__iexact=value)
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
+        if getattr(self.user, 'is_deleted', False) or not self.user.is_active:
+            raise serializers.ValidationError("This account has been deleted or deactivated.")
         return value
 
 
@@ -153,6 +167,9 @@ class ResetPasswordSerializer(serializers.Serializer):
         except User.DoesNotExist:
             raise serializers.ValidationError("User with this email does not exist.")
 
+        if getattr(user, 'is_deleted', False) or not user.is_active:
+            raise serializers.ValidationError("This account has been deleted or deactivated.")
+
         otp_record = EmailOTP.objects.filter(
             user=user, 
             otp_code=otp_code, 
@@ -168,5 +185,29 @@ class ResetPasswordSerializer(serializers.Serializer):
 
         attrs['user'] = user
         attrs['otp_record'] = otp_record
+        return attrs
+
+
+class DeleteAccountSerializer(serializers.Serializer):
+    password = serializers.CharField(
+        required=False, 
+        allow_blank=True, 
+        write_only=True, 
+        help_text="User's current password (optional for social auth accounts)"
+    )
+    confirm = serializers.BooleanField(
+        required=False, 
+        default=True, 
+        help_text="Explicit confirmation to soft delete the account"
+    )
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            user = request.user
+            password = attrs.get('password')
+            if password and user.has_usable_password():
+                if not user.check_password(password):
+                    raise serializers.ValidationError({"password": "Incorrect password."})
         return attrs
 

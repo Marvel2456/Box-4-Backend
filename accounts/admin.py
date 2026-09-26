@@ -6,12 +6,13 @@ from .models import User, EmailOTP
 # Unfold-styled User admin
 class CustomUserAdmin(ModelAdmin, BaseUserAdmin):
     model = User
-    list_display = ['email', 'username', 'role', 'is_email_verified', 'is_staff']
+    list_display = ['email', 'username', 'role', 'is_email_verified', 'is_deleted', 'is_suspended', 'is_staff']
+    list_filter = ['role', 'is_email_verified', 'is_deleted', 'is_suspended', 'is_staff']
     fieldsets = BaseUserAdmin.fieldsets + (
-        ('Custom Roles & Status', {'fields': ('role', 'is_email_verified')}),
+        ('Custom Roles & Status', {'fields': ('role', 'is_email_verified', 'is_suspended', 'is_deleted', 'deleted_at')}),
     )
     add_fieldsets = BaseUserAdmin.add_fieldsets + (
-        ('Custom Roles & Status', {'fields': ('role', 'is_email_verified')}),
+        ('Custom Roles & Status', {'fields': ('role', 'is_email_verified', 'is_suspended', 'is_deleted', 'deleted_at')}),
     )
 
 # Unfold-styled OTP admin

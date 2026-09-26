@@ -5,6 +5,15 @@ class CaseInsensitiveEmailBackend(ModelBackend):
     """
     Custom authentication backend allowing case-insensitive email authentication.
     """
+    def user_can_authenticate(self, user):
+        """
+        Reject users that are inactive, deleted, or suspended.
+        """
+        is_active = getattr(user, 'is_active', None)
+        is_deleted = getattr(user, 'is_deleted', False)
+        is_suspended = getattr(user, 'is_suspended', False)
+        return bool(is_active and not is_deleted and not is_suspended)
+
     def authenticate(self, request, username=None, password=None, **kwargs):
         UserModel = get_user_model()
         if username is None:

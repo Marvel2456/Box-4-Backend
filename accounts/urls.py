@@ -7,7 +7,8 @@ from .views import (
     OTPResendView,
     GoogleAuthView,
     ForgotPasswordView,
-    ResetPasswordView
+    ResetPasswordView,
+    DeleteAccountView
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
     path('google/', GoogleAuthView.as_view(), name='google_auth'),
     path('forgot-password/', ForgotPasswordView.as_view(), name='forgot_password'),
     path('reset-password/', ResetPasswordView.as_view(), name='reset_password'),
+    path('delete-account/', DeleteAccountView.as_view(), name='delete_account'),
 ]

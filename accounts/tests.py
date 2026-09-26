@@ -274,3 +274,120 @@ class ProfileTests(APITestCase):
         profile = BuyerProfile.objects.get(user=self.user)
         self.assertEqual(float(profile.latitude), 37.774900)
         self.assertEqual(float(profile.longitude), -122.419400)
+
+
+class DeleteAccountTests(APITestCase):
+    def setUp(self):
+        self.delete_url = reverse('delete_account')
+        self.login_url = reverse('auth_login')
+        self.google_url = reverse('google_auth')
+        self.forgot_password_url = reverse('forgot_password')
+
+        # Create buyer user
+        self.buyer = User.objects.create_user(
+            email="deletebuyer@example.com",
+            username="deletebuyer@example.com",
+            password="securepassword123",
+            full_name="Delete Buyer",
+            role="buyer"
+        )
+        self.buyer.is_email_verified = True
+        self.buyer.save()
+
+        # Create agent user
+        self.agent = User.objects.create_user(
+            email="deleteagent@example.com",
+            username="deleteagent@example.com",
+            password="agentpassword123",
+            full_name="Delete Agent",
+            role="agent"
+        )
+        self.agent.is_email_verified = True
+        self.agent.save()
+
+    def test_unauthenticated_delete_account_fails(self):
+        response = self.client.post(self.delete_url, {})
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_buyer_soft_delete_account_success(self):
+        self.client.force_authenticate(user=self.buyer)
+        response = self.client.post(self.delete_url, {"password": "securepassword123"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("deleted successfully", response.data['message'])
+
+        self.buyer.refresh_from_db()
+        self.assertTrue(self.buyer.is_deleted)
+        self.assertFalse(self.buyer.is_active)
+        self.assertIsNotNone(self.buyer.deleted_at)
+
+        # Attempt login after deletion
+        self.client.logout()
+        login_resp = self.client.post(self.login_url, {
+            "email": "deletebuyer@example.com",
+            "password": "securepassword123"
+        })
+        self.assertEqual(login_resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # Attempt forgot password after deletion
+        forgot_resp = self.client.post(self.forgot_password_url, {
+            "email": "deletebuyer@example.com"
+        })
+        self.assertEqual(forgot_resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch('accounts.views.verify_google_token')
+    def test_deleted_user_google_auth_blocked(self, mock_google_verify):
+        mock_google_verify.return_value = {
+            'email': self.buyer.email,
+            'name': 'Delete Buyer'
+        }
+        # First soft delete the buyer
+        self.client.force_authenticate(user=self.buyer)
+        self.client.post(self.delete_url, {"confirm": True})
+
+        # Attempt Google login
+        self.client.logout()
+        google_resp = self.client.post(self.google_url, {
+            "token": "valid_google_token",
+            "role": "buyer"
+        })
+        self.assertEqual(google_resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("deleted or deactivated", google_resp.data['error'])
+
+    def test_agent_soft_delete_deactivates_listings(self):
+        from agents.models import Category, Listing
+        category = Category.objects.create(name="Apartment")
+        listing = Listing.objects.create(
+            agent=self.agent,
+            title="Luxury Suite",
+            category=category,
+            price=50000.00,
+            address="123 Ocean View",
+            latitude=6.5244,
+            longitude=3.3792,
+            is_published=True,
+            status='active'
+        )
+
+        self.client.force_authenticate(user=self.agent)
+        response = self.client.delete(self.delete_url, {"confirm": True})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.agent.refresh_from_db()
+        self.assertTrue(self.agent.is_deleted)
+        self.assertFalse(self.agent.is_active)
+
+        # Verify agent listing is unpublished and marked inactive
+        listing.refresh_from_db()
+        self.assertFalse(listing.is_published)
+        self.assertEqual(listing.status, 'inactive')
+
+    def test_soft_delete_with_wrong_password_fails(self):
+        self.client.force_authenticate(user=self.buyer)
+        response = self.client.post(self.delete_url, {"password": "wrong_password_here"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
+
+        self.buyer.refresh_from_db()
+        self.assertFalse(self.buyer.is_deleted)
+        self.assertTrue(self.buyer.is_active)
+

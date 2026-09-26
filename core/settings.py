@@ -106,7 +106,9 @@ DB_PASSWORD = os.getenv('DB_PASSWORD') or os.getenv('POSTGRES_PASSWORD')
 DB_HOST = os.getenv('DB_HOST') or os.getenv('POSTGRES_HOST') or 'db'
 DB_PORT = os.getenv('DB_PORT') or os.getenv('POSTGRES_PORT') or '5432'
 
-if DB_NAME and DB_USER:
+USE_SQLITE = os.getenv('USE_SQLITE', 'False') == 'True'
+
+if not USE_SQLITE and DB_NAME and DB_USER:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
