@@ -1,11 +1,15 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .models import Notification
-from .serializers import NotificationSerializer
+from .models import Notification, DeviceToken
+from .serializers import (
+    NotificationSerializer, 
+    DeviceTokenSerializer, 
+    DeviceTokenUnregisterSerializer
+)
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
@@ -56,3 +60,29 @@ class NotificationViewSet(viewsets.ModelViewSet):
     def read_all(self, request):
         Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
         return Response({"message": "All notifications marked as read."}, status=status.HTTP_200_OK)
+
+
+class DeviceTokenView(generics.GenericAPIView):
+    serializer_class = DeviceTokenSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=DeviceTokenSerializer,
+        responses={200: DeviceTokenSerializer, 201: DeviceTokenSerializer}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        device_token = serializer.save()
+        return Response(DeviceTokenSerializer(device_token).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        request_body=DeviceTokenUnregisterSerializer,
+        responses={200: openapi.Response(description="Device token deactivated successfully")}
+    )
+    def delete(self, request, *args, **kwargs):
+        serializer = DeviceTokenUnregisterSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data['token']
+        DeviceToken.objects.filter(user=request.user, token=token).update(is_active=False)
+        return Response({"message": "Device token deactivated successfully."}, status=status.HTTP_200_OK)

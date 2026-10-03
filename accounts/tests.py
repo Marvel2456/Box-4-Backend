@@ -391,3 +391,79 @@ class DeleteAccountTests(APITestCase):
         self.assertFalse(self.buyer.is_deleted)
         self.assertTrue(self.buyer.is_active)
 
+
+class ChangePasswordTests(APITestCase):
+    def setUp(self):
+        self.change_password_url = reverse('change_password')
+        self.login_url = reverse('auth_login')
+
+        self.user = User.objects.create_user(
+            email="changepass@example.com",
+            username="changepass@example.com",
+            password="originalpassword123",
+            full_name="Password Changer",
+            role="buyer"
+        )
+        self.user.is_email_verified = True
+        self.user.must_change_password = True
+        self.user.save()
+
+    def test_unauthenticated_change_password_fails(self):
+        response = self.client.post(self.change_password_url, {
+            "old_password": "originalpassword123",
+            "new_password": "brandnewpassword456"
+        })
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_change_password_success(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.change_password_url, {
+            "old_password": "originalpassword123",
+            "new_password": "brandnewpassword456",
+            "confirm_password": "brandnewpassword456"
+        })
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("Password changed successfully", response.data['message'])
+        self.assertIn("tokens", response.data)
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("brandnewpassword456"))
+        self.assertFalse(self.user.must_change_password)
+
+        # Verify login with new password
+        self.client.logout()
+        login_resp = self.client.post(self.login_url, {
+            "email": "changepass@example.com",
+            "password": "brandnewpassword456"
+        })
+        self.assertEqual(login_resp.status_code, status.HTTP_200_OK)
+
+    def test_change_password_wrong_old_password_fails(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.change_password_url, {
+            "old_password": "wrongoldpassword",
+            "new_password": "brandnewpassword456"
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("old_password", response.data)
+
+    def test_change_password_same_password_fails(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.change_password_url, {
+            "old_password": "originalpassword123",
+            "new_password": "originalpassword123"
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("new_password", response.data)
+
+    def test_change_password_mismatched_confirm_fails(self):
+        self.client.force_authenticate(user=self.user)
+        response = self.client.post(self.change_password_url, {
+            "old_password": "originalpassword123",
+            "new_password": "brandnewpassword456",
+            "confirm_password": "differentpassword789"
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("confirm_password", response.data)
+
+

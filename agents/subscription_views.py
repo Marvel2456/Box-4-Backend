@@ -19,14 +19,30 @@ from .subscription_serializers import (
 class AgentPlanListView(generics.ListAPIView):
     """
     List all active subscription plans available for agents.
+    Supports filtering by ?billing_cycle=monthly|quarterly|yearly.
     """
     permission_classes = [permissions.AllowAny]
-    queryset = Plan.objects.filter(is_active=True).order_by('price')
     serializer_class = AgentPlanSerializer
     pagination_class = None
 
+    def get_queryset(self):
+        qs = Plan.objects.filter(is_active=True).order_by('price')
+        cycle = self.request.query_params.get('billing_cycle')
+        if cycle:
+            qs = qs.filter(billing_cycle=cycle)
+        return qs
+
     @swagger_auto_schema(
-        operation_description="Get all active subscription plans available for agents with pricing and thresholds.",
+        operation_description="Get all active subscription plans available for agents with pricing and thresholds. Optionally filter by ?billing_cycle=monthly|quarterly|yearly.",
+        manual_parameters=[
+            openapi.Parameter(
+                'billing_cycle',
+                openapi.IN_QUERY,
+                description="Filter plans by billing cycle ('monthly', 'quarterly', 'yearly')",
+                type=openapi.TYPE_STRING,
+                enum=['monthly', 'quarterly', 'yearly']
+            )
+        ],
         responses={200: AgentPlanSerializer(many=True)}
     )
     def get(self, request, *args, **kwargs):

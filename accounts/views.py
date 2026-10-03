@@ -21,7 +21,8 @@ from .serializers import (
     GoogleAuthSerializer,
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
-    DeleteAccountSerializer
+    DeleteAccountSerializer,
+    ChangePasswordSerializer
 )
 
 User = get_user_model()
@@ -289,5 +290,35 @@ class DeleteAccountView(generics.GenericAPIView):
 
         return Response({
             "message": "Your account has been deleted successfully. You will no longer be able to log in."
+        }, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(generics.GenericAPIView):
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=ChangePasswordSerializer,
+        responses={200: openapi.Response(description="Password changed successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        new_password = serializer.validated_data['new_password']
+        user.set_password(new_password)
+        user.must_change_password = False
+        user.save()
+
+        # Generate fresh JWT tokens
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            "message": "Password changed successfully.",
+            "tokens": {
+                "refresh": str(refresh),
+                "access": str(refresh.access_token)
+            }
         }, status=status.HTTP_200_OK)
 

@@ -118,3 +118,30 @@ class NotificationAPITests(APITestCase):
         # Verify notification was created for agent
         agent_notifs = Notification.objects.filter(recipient=self.agent_user, notification_type="saved_listing")
         self.assertTrue(agent_notifs.exists())
+
+    def test_device_token_registration_and_deactivation(self):
+        token = self.get_jwt_token("notifbuyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        devices_url = reverse('device-tokens')
+
+        # 1. Register device token
+        data = {
+            "token": "fcm_sample_token_xyz_12345",
+            "platform": "android"
+        }
+        res = self.client.post(devices_url, data)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['token'], "fcm_sample_token_xyz_12345")
+        self.assertTrue(res.data['is_active'])
+
+        from .models import DeviceToken
+        self.assertTrue(DeviceToken.objects.filter(user=self.buyer_user, token="fcm_sample_token_xyz_12345", is_active=True).exists())
+
+        # 2. Deactivate device token on logout
+        del_res = self.client.delete(devices_url, {"token": "fcm_sample_token_xyz_12345"})
+        self.assertEqual(del_res.status_code, status.HTTP_200_OK)
+
+        device = DeviceToken.objects.get(token="fcm_sample_token_xyz_12345")
+        self.assertFalse(device.is_active)
+

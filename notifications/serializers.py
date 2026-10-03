@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .models import Notification
+from .models import Notification, DeviceToken
 
 User = get_user_model()
 
@@ -41,3 +41,29 @@ class NotificationSerializer(serializers.ModelSerializer):
                     return request.build_absolute_uri(first_image.image.url)
                 return first_image.image.url
         return None
+
+
+class DeviceTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeviceToken
+        fields = ('id', 'token', 'platform', 'is_active', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        token = validated_data['token']
+        platform = validated_data.get('platform', 'android')
+        
+        device_token, created = DeviceToken.objects.update_or_create(
+            token=token,
+            defaults={
+                'user': user,
+                'platform': platform,
+                'is_active': True
+            }
+        )
+        return device_token
+
+
+class DeviceTokenUnregisterSerializer(serializers.Serializer):
+    token = serializers.CharField(required=True, help_text="FCM Device registration token to deactivate")

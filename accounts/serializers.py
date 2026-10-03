@@ -211,3 +211,43 @@ class DeleteAccountSerializer(serializers.Serializer):
                     raise serializers.ValidationError({"password": "Incorrect password."})
         return attrs
 
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        help_text="User's current password"
+    )
+    new_password = serializers.CharField(
+        required=True,
+        write_only=True,
+        min_length=8,
+        help_text="New password (minimum 8 characters)"
+    )
+    confirm_password = serializers.CharField(
+        required=False,
+        write_only=True,
+        help_text="Confirmation of new password"
+    )
+
+    def validate_old_password(self, value):
+        request = self.context.get('request')
+        if not request or not request.user or not request.user.is_authenticated:
+            raise serializers.ValidationError("Authentication credentials required.")
+        if not request.user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate(self, attrs):
+        old_password = attrs.get('old_password')
+        new_password = attrs.get('new_password')
+        confirm_password = attrs.get('confirm_password')
+
+        if old_password and new_password and old_password == new_password:
+            raise serializers.ValidationError({"new_password": "New password cannot be the same as your current password."})
+
+        if confirm_password and new_password != confirm_password:
+            raise serializers.ValidationError({"confirm_password": "New passwords do not match."})
+
+        return attrs
+

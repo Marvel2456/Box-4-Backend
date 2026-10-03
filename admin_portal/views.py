@@ -1323,12 +1323,27 @@ class AdminSubscriptionsListView(generics.GenericAPIView):
 
 class AdminPlanListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAdminOnlyRole]
-    queryset = Plan.objects.all().order_by('price')
     serializer_class = PlanManagementSerializer
     pagination_class = None
 
+    def get_queryset(self):
+        qs = Plan.objects.all().order_by('price')
+        cycle = self.request.query_params.get('billing_cycle')
+        if cycle:
+            qs = qs.filter(billing_cycle=cycle)
+        return qs
+
     @swagger_auto_schema(
-        operation_description="List all subscription plans or create a new plan with custom thresholds.",
+        operation_description="List all subscription plans or create a new plan with custom thresholds. Optionally filter by ?billing_cycle=monthly|quarterly|yearly.",
+        manual_parameters=[
+            openapi.Parameter(
+                'billing_cycle',
+                openapi.IN_QUERY,
+                description="Filter plans by billing cycle ('monthly', 'quarterly', 'yearly')",
+                type=openapi.TYPE_STRING,
+                enum=['monthly', 'quarterly', 'yearly']
+            )
+        ],
         responses={200: PlanManagementSerializer(many=True), 201: PlanManagementSerializer()}
     )
     def get(self, request, *args, **kwargs):

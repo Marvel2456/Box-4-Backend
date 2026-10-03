@@ -785,6 +785,47 @@ class ListingAPITests(APITestCase):
             self.assertIn('views_count', prop)
             self.assertNotIn('buyers', prop)
 
+    def test_monthly_quarterly_yearly_subscription_plans(self):
+        token = self.get_jwt_token("agent1@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
 
+        # 1. Create monthly, quarterly, and yearly plans with same base tier name
+        pro_monthly = Plan.objects.create(
+            name="Pro Plan", price=15000.00, billing_cycle="monthly", max_boosted=5, max_featured=2
+        )
+        pro_quarterly = Plan.objects.create(
+            name="Pro Plan", price=40000.00, billing_cycle="quarterly", max_boosted=5, max_featured=6
+        )
+        pro_yearly = Plan.objects.create(
+            name="Pro Plan", price=150000.00, billing_cycle="yearly", max_boosted=10, max_featured=25
+        )
 
+        # 2. Filter plans by billing cycle
+        res_quarterly = self.client.get(f"{reverse('agent-plans-list')}?billing_cycle=quarterly")
+        self.assertEqual(res_quarterly.status_code, status.HTTP_200_OK)
+        self.assertTrue(all(p['billing_cycle'] == 'quarterly' for p in res_quarterly.data))
+        self.assertTrue(any(p['id'] == str(pro_quarterly.id) for p in res_quarterly.data))
+
+        res_yearly = self.client.get(f"{reverse('agent-plans-list')}?billing_cycle=yearly")
+        self.assertEqual(res_yearly.status_code, status.HTTP_200_OK)
+        self.assertTrue(all(p['billing_cycle'] == 'yearly' for p in res_yearly.data))
+        self.assertTrue(any(p['id'] == str(pro_yearly.id) for p in res_yearly.data))
+
+        # 3. Subscribe to Yearly Plan and verify renewal is ~365 days
+        sub_url = reverse('agent-subscription-subscribe')
+        sub_res = self.client.post(sub_url, {
+            "plan_id": str(pro_yearly.id),
+            "payment_method": "card",
+            "transaction_reference": "TX-YEARLY-001"
+        })
+        self.assertEqual(sub_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(sub_res.data['subscription']['billing_cycle'], "yearly")
+        self.assertEqual(sub_res.data['subscription']['price'], 150000.00)
+
+        # 4. Check Current Subscription Status
+        status_url = reverse('agent-subscription-status')
+        status_res = self.client.get(status_url)
+        self.assertEqual(status_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(status_res.data['plan']['billing_cycle'], "yearly")
+        self.assertGreaterEqual(status_res.data['days_left'], 360)
 
