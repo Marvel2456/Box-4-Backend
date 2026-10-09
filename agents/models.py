@@ -50,6 +50,17 @@ class Listing(models.Model):
     #     ('airbnb', 'Airbnb'),
     # )
 
+    LISTING_TYPE_CHOICES = (
+        ('rent', 'For Rent'),
+        ('sale', 'For Sale'),
+    )
+    RENT_FREQUENCY_CHOICES = (
+        ('yearly', 'Per Year'),
+        ('monthly', 'Per Month'),
+        ('weekly', 'Per Week'),
+        ('daily', 'Per Day'),
+    )
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     agent = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
@@ -60,6 +71,21 @@ class Listing(models.Model):
     title = models.CharField(max_length=255)
     category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name='listings')
     tag = models.ManyToManyField(Tag, blank=True, related_name='listings')
+    listing_type = models.CharField(
+        max_length=20, 
+        choices=LISTING_TYPE_CHOICES, 
+        default='sale', 
+        db_index=True,
+        help_text="Specify whether property is for rent or for sale/buying"
+    )
+    rent_frequency = models.CharField(
+        max_length=20, 
+        choices=RENT_FREQUENCY_CHOICES, 
+        default='yearly', 
+        blank=True, 
+        null=True,
+        help_text="Rent frequency/period (defaults to 'yearly' for rent properties)"
+    )
     price = models.DecimalField(max_digits=12, decimal_places=2)
     
     # Location

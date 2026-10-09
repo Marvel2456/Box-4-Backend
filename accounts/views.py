@@ -278,18 +278,10 @@ class DeleteAccountView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         user = request.user
-        user.is_deleted = True
-        user.is_active = False
-        user.deleted_at = timezone.now()
-        user.save()
-
-        # If user is an agent, unpublish and deactivate all their listings
-        if user.role == 'agent':
-            from agents.models import Listing
-            Listing.objects.filter(agent=user).update(is_published=False, status='inactive')
+        user.delete()
 
         return Response({
-            "message": "Your account has been deleted successfully. You will no longer be able to log in."
+            "message": "Your account has been deleted successfully."
         }, status=status.HTTP_200_OK)
 
 

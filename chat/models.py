@@ -26,7 +26,7 @@ class ChatRoom(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.channel_name:
-            self.channel_name = f"chatroom_{self.id}"
+            self.channel_name = f"private-chat-{self.id}"
         super().save(*args, **kwargs)
 
     @classmethod
@@ -45,7 +45,7 @@ class ChatRoom(models.Model):
             room = cls.objects.create(listing=listing)
             room.participants.add(user1, user2)
             if not room.channel_name:
-                room.channel_name = f"chatroom_{room.id}"
+                room.channel_name = f"private-chat-{room.id}"
                 room.save(update_fields=['channel_name'])
         return room
 

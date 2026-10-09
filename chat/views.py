@@ -18,7 +18,8 @@ from .serializers import (
     ConversationPreviewSerializer,
     ContactAgentResponseSerializer,
     MarkReadSerializer,
-    UnreadCountSerializer
+    UnreadCountSerializer,
+    PusherAuthSerializer
 )
 from agents.models import Listing
 from core.firebase import send_push_notification
@@ -26,23 +27,116 @@ from core.firebase import send_push_notification
 User = get_user_model()
 
 
+def get_configured_pusher_client():
+    if settings.PUSHER_APP_ID and settings.PUSHER_KEY and settings.PUSHER_SECRET:
+        try:
+            return pusher.Pusher(
+                app_id=settings.PUSHER_APP_ID,
+                key=settings.PUSHER_KEY,
+                secret=settings.PUSHER_SECRET,
+                cluster=settings.PUSHER_CLUSTER,
+                ssl=True
+            )
+        except Exception:
+            return None
+    return None
+
+
+class PusherAuthView(generics.GenericAPIView):
+    """
+    Pusher Channel Authentication Endpoint.
+    Authenticates private channels (e.g. private-chat-<chatroom_id>, private-user-<user_id>).
+    """
+    serializer_class = PusherAuthSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=PusherAuthSerializer,
+        responses={
+            200: openapi.Response(description="Pusher auth response payload"),
+            403: openapi.Response(description="Forbidden - User not authorized for channel"),
+            503: openapi.Response(description="Pusher service not configured")
+        }
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        socket_id = serializer.validated_data['socket_id']
+        channel_name = serializer.validated_data['channel_name']
+
+        pusher_client = get_configured_pusher_client()
+        if not pusher_client:
+            return Response(
+                {"error": "Pusher service is not configured on the server."}, 
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        # 1. Authorize ChatRoom channels (e.g., 'private-chat-<room_id>', 'private-chatroom-<room_id>', 'private-chat_<room_id>')
+        if channel_name.startswith(('private-chat-', 'private-chatroom-', 'private-chat_')):
+            room_identifier = (
+                channel_name.replace('private-chat-', '')
+                            .replace('private-chatroom-', '')
+                            .replace('private-chat_', '')
+            )
+            is_authorized = (
+                ChatRoom.objects.filter(id=room_identifier, participants=request.user).exists()
+                or ChatRoom.objects.filter(channel_name=channel_name, participants=request.user).exists()
+            )
+            if not is_authorized:
+                return Response(
+                    {"error": "Forbidden: You are not a participant in this chatroom."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        # 2. Authorize User personal channels (e.g., 'private-user-<user_id>', 'private-user_<user_id>')
+        elif channel_name.startswith(('private-user-', 'private-user_')):
+            user_identifier = (
+                channel_name.replace('private-user-', '')
+                            .replace('private-user_', '')
+            )
+            if str(request.user.id) != str(user_identifier):
+                return Response(
+                    {"error": "Forbidden: You cannot subscribe to another user's personal channel."}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        # 3. For any other private channel, reject by default
+        elif channel_name.startswith('private-'):
+            return Response(
+                {"error": "Forbidden: Unauthorized channel subscription."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Generate Pusher authentication signature
+        try:
+            auth_response = pusher_client.authenticate(
+                channel=channel_name,
+                socket_id=socket_id
+            )
+            return Response(auth_response, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to authenticate channel: {str(e)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
 class ChatViewSet(viewsets.GenericViewSet):
     serializer_class = MessageSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_pusher_client(self):
-        if settings.PUSHER_APP_ID and settings.PUSHER_KEY and settings.PUSHER_SECRET:
-            try:
-                return pusher.Pusher(
-                    app_id=settings.PUSHER_APP_ID,
-                    key=settings.PUSHER_KEY,
-                    secret=settings.PUSHER_SECRET,
-                    cluster=settings.PUSHER_CLUSTER,
-                    ssl=True
-                )
-            except Exception:
-                return None
-        return None
+        return get_configured_pusher_client()
+
+    @swagger_auto_schema(
+        request_body=PusherAuthSerializer,
+        responses={200: openapi.Response(description="Pusher auth response payload")}
+    )
+    @action(detail=False, methods=['post'], url_path='pusher/auth')
+    def pusher_auth(self, request):
+        auth_view = PusherAuthView.as_view()
+        return auth_view(request._request)
 
     @swagger_auto_schema(request_body=SendMessageSerializer, responses={201: MessageSerializer})
     @action(detail=False, methods=['post'])
@@ -104,8 +198,16 @@ class ChatViewSet(viewsets.GenericViewSet):
             listing=listing_obj or room.listing
         )
 
-        # Calculate receiver unread counts
-        receiver_unread_total = Message.objects.filter(receiver=receiver, is_read=False).count()
+        # Calculate receiver unread counts (strictly consistent with active conversations)
+        receiver_unread_total = Message.objects.filter(
+            receiver=receiver, 
+            is_read=False,
+            chatroom__isnull=False
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
 
         # Broadcast Pusher Real-Time Events
         pusher_client = self.get_pusher_client()
@@ -118,7 +220,32 @@ class ChatViewSet(viewsets.GenericViewSet):
                     'new_message',
                     message_payload
                 )
-                # 2. Broadcast to receiver personal channels for badge & live update
+                # 2. Broadcast to receiver personal private channel for live update & instant badge count
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'new_message',
+                    message_payload
+                )
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'unread_count_update',
+                    {
+                        'unread_messages_count': receiver_unread_total,
+                        'chatroom_id': str(room.id)
+                    }
+                )
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'new_notification',
+                    {
+                        'type': 'message',
+                        'title': 'New Message',
+                        'message': f"{request.user.full_name}: {msg_text[:100]}",
+                        'chatroom_id': str(room.id),
+                        'channel_name': room.channel_name
+                    }
+                )
+                # Backwards-compatibility triggers
                 pusher_client.trigger(
                     f'private-chat_{receiver.id}',
                     'new_message',
@@ -207,6 +334,17 @@ class ChatViewSet(viewsets.GenericViewSet):
             if other_user:
                 Notification.objects.filter(recipient=request.user, sender=other_user, is_read=False).update(is_read=True)
 
+            # Calculate updated unread count for request.user
+            user_unread_total = Message.objects.filter(
+                receiver=request.user, 
+                is_read=False,
+                chatroom__isnull=False
+            ).exclude(
+                sender__is_deleted=True
+            ).exclude(
+                sender__is_active=False
+            ).count()
+
             # Broadcast read receipts via Pusher
             pusher_client = self.get_pusher_client()
             if pusher_client:
@@ -221,13 +359,31 @@ class ChatViewSet(viewsets.GenericViewSet):
                         }
                     )
                     pusher_client.trigger(
-                        f'user_{request.user.id}',
+                        f'private-user-{request.user.id}',
                         'unread_count_update',
                         {
-                            'unread_messages_count': Message.objects.filter(receiver=request.user, is_read=False).count(),
+                            'unread_messages_count': user_unread_total,
                             'chatroom_id': str(room.id)
                         }
                     )
+                    pusher_client.trigger(
+                        f'user_{request.user.id}',
+                        'unread_count_update',
+                        {
+                            'unread_messages_count': user_unread_total,
+                            'chatroom_id': str(room.id)
+                        }
+                    )
+                    if other_user:
+                        pusher_client.trigger(
+                            f'private-user-{other_user.id}',
+                            'messages_read',
+                            {
+                                'chatroom_id': str(room.id),
+                                'reader_id': str(request.user.id),
+                                'read_at': now.isoformat()
+                            }
+                        )
                 except Exception:
                     pass
 
@@ -243,11 +399,18 @@ class ChatViewSet(viewsets.GenericViewSet):
         results = []
         for room in rooms:
             partner = room.participants.exclude(id=user.id).first()
-            if not partner:
+            if not partner or getattr(partner, 'is_deleted', False) or not getattr(partner, 'is_active', True):
                 continue
 
             last_msg = room.messages.order_by('-timestamp').first()
-            unread_count = room.messages.filter(receiver=user, is_read=False).count()
+            unread_count = room.messages.filter(
+                receiver=user, 
+                is_read=False
+            ).exclude(
+                sender__is_deleted=True
+            ).exclude(
+                sender__is_active=False
+            ).count()
 
             profile_pic = None
             if hasattr(partner, 'agent_profile') and partner.agent_profile.profile_picture:
@@ -309,6 +472,17 @@ class ChatViewSet(viewsets.GenericViewSet):
         if other_user:
             Notification.objects.filter(recipient=request.user, sender=other_user, is_read=False).update(is_read=True)
 
+        # Calculate updated unread count for request.user
+        user_unread_total = Message.objects.filter(
+            receiver=request.user, 
+            is_read=False,
+            chatroom__isnull=False
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
+
         # Real-time Pusher updates
         pusher_client = self.get_pusher_client()
         if pusher_client:
@@ -323,28 +497,55 @@ class ChatViewSet(viewsets.GenericViewSet):
                         'read_at': now.isoformat()
                     }
                 )
-                # Update user's global unread count badge
+                # Update user's personal unread count badge
+                pusher_client.trigger(
+                    f'private-user-{request.user.id}',
+                    'unread_count_update',
+                    {
+                        'unread_messages_count': user_unread_total,
+                        'chatroom_id': str(room.id)
+                    }
+                )
                 pusher_client.trigger(
                     f'user_{request.user.id}',
                     'unread_count_update',
                     {
-                        'unread_messages_count': Message.objects.filter(receiver=request.user, is_read=False).count(),
+                        'unread_messages_count': user_unread_total,
                         'chatroom_id': str(room.id)
                     }
                 )
+                # Notify other participant's personal channel that messages were read
+                if other_user:
+                    pusher_client.trigger(
+                        f'private-user-{other_user.id}',
+                        'messages_read',
+                        {
+                            'chatroom_id': str(room.id),
+                            'reader_id': str(request.user.id),
+                            'read_at': now.isoformat()
+                        }
+                    )
             except Exception:
                 pass
 
         return Response({
             "message": "Messages marked as read successfully.",
             "marked_count": updated_count,
-            "unread_count": Message.objects.filter(receiver=request.user, is_read=False).count()
+            "unread_count": user_unread_total
         }, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(responses={200: UnreadCountSerializer})
     @action(detail=False, methods=['get'], url_path='unread-count')
     def unread_count(self, request):
-        count = Message.objects.filter(receiver=request.user, is_read=False).count()
+        count = Message.objects.filter(
+            receiver=request.user, 
+            is_read=False,
+            chatroom__isnull=False
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
         return Response({"unread_count": count}, status=status.HTTP_200_OK)
 
 
@@ -353,18 +554,7 @@ class ContactAgentView(generics.GenericAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_pusher_client(self):
-        if settings.PUSHER_APP_ID and settings.PUSHER_KEY and settings.PUSHER_SECRET:
-            try:
-                return pusher.Pusher(
-                    app_id=settings.PUSHER_APP_ID,
-                    key=settings.PUSHER_KEY,
-                    secret=settings.PUSHER_SECRET,
-                    cluster=settings.PUSHER_CLUSTER,
-                    ssl=True
-                )
-            except Exception:
-                return None
-        return None
+        return get_configured_pusher_client()
 
     @swagger_auto_schema(request_body=InitiateChatSerializer, responses={201: ContactAgentResponseSerializer})
     def post(self, request, *args, **kwargs):
@@ -429,18 +619,53 @@ class ContactAgentView(generics.GenericAPIView):
         )
 
         # Calculate receiver unread count
-        receiver_unread_total = Message.objects.filter(receiver=receiver, is_read=False).count()
+        receiver_unread_total = Message.objects.filter(
+            receiver=receiver, 
+            is_read=False,
+            chatroom__isnull=False
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
 
         # Trigger Pusher
         pusher_client = self.get_pusher_client()
         if pusher_client:
             message_payload = MessageSerializer(message).data
             try:
+                # 1. Chatroom channel
                 pusher_client.trigger(
                     room.channel_name,
                     'new_message',
                     message_payload
                 )
+                # 2. Receiver personal private channel
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'new_message',
+                    message_payload
+                )
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'unread_count_update',
+                    {
+                        'unread_messages_count': receiver_unread_total,
+                        'chatroom_id': str(room.id)
+                    }
+                )
+                pusher_client.trigger(
+                    f'private-user-{receiver.id}',
+                    'new_notification',
+                    {
+                        'type': 'inquiry',
+                        'title': 'Property Inquiry',
+                        'message': intro_msg,
+                        'chatroom_id': str(room.id),
+                        'channel_name': room.channel_name
+                    }
+                )
+                # Backwards compatibility triggers
                 pusher_client.trigger(
                     f'private-chat_{receiver.id}',
                     'new_message',

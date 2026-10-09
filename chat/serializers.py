@@ -90,3 +90,8 @@ class MarkReadSerializer(serializers.Serializer):
 
 class UnreadCountSerializer(serializers.Serializer):
     unread_count = serializers.IntegerField()
+
+
+class PusherAuthSerializer(serializers.Serializer):
+    socket_id = serializers.CharField(required=True, help_text="Pusher client socket_id")
+    channel_name = serializers.CharField(required=True, help_text="Channel name to authenticate (e.g., private-chat-<chatroom_id> or private-user-<user_id>)")

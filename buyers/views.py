@@ -64,6 +64,8 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
             openapi.Parameter('tags', openapi.IN_QUERY, description="Alias for tag filter", type=openapi.TYPE_STRING),
             openapi.Parameter('city', openapi.IN_QUERY, description="Filter by city (e.g. 'Lekki', 'Yaba')", type=openapi.TYPE_STRING),
             openapi.Parameter('state', openapi.IN_QUERY, description="Filter by state (e.g. 'Lagos', 'Abuja')", type=openapi.TYPE_STRING),
+            openapi.Parameter('listing_type', openapi.IN_QUERY, description="Filter by listing type ('rent' or 'sale'/'buy')", type=openapi.TYPE_STRING),
+            openapi.Parameter('type', openapi.IN_QUERY, description="Alias for listing_type filter", type=openapi.TYPE_STRING),
             openapi.Parameter('country', openapi.IN_QUERY, description="Filter by country (default: 'Nigeria')", type=openapi.TYPE_STRING),
             openapi.Parameter('min_price', openapi.IN_QUERY, description="Minimum price filter", type=openapi.TYPE_NUMBER),
             openapi.Parameter('max_price', openapi.IN_QUERY, description="Maximum price filter", type=openapi.TYPE_NUMBER),
@@ -93,6 +95,16 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
             ).distinct()
 
         # 2. Specific Multi-Filters
+        listing_type_param = request.query_params.get('listing_type') or request.query_params.get('type')
+        if listing_type_param:
+            lt_clean = listing_type_param.strip().lower()
+            if lt_clean in ['buy', 'buying', 'for sale', 'sale']:
+                queryset = queryset.filter(listing_type='sale')
+            elif lt_clean in ['rent', 'rental', 'for rent']:
+                queryset = queryset.filter(listing_type='rent')
+            else:
+                queryset = queryset.filter(listing_type=lt_clean)
+
         category = request.query_params.get('category')
         if category:
             try:

@@ -24,6 +24,12 @@ from .subscription_views import (
     AgentCancelSubscriptionView,
     AgentSubscriptionHistoryView,
 )
+from .payment_views import (
+    PaymentInitializeView,
+    PaymentVerifyView,
+    PaystackWebhookView,
+    PaymentTransactionHistoryView,
+)
 
 urlpatterns = [
     # KYC
@@ -47,6 +53,12 @@ urlpatterns = [
     path('subscription/subscribe/', AgentSubscribeView.as_view(), name='agent-subscription-subscribe'),
     path('subscription/cancel/', AgentCancelSubscriptionView.as_view(), name='agent-subscription-cancel'),
     path('subscription/history/', AgentSubscriptionHistoryView.as_view(), name='agent-subscription-history'),
+
+    # Paystack Payments Flow
+    path('payments/initialize/', PaymentInitializeView.as_view(), name='agent-payment-initialize'),
+    path('payments/verify/', PaymentVerifyView.as_view(), name='agent-payment-verify'),
+    path('payments/webhook/', PaystackWebhookView.as_view(), name='agent-paystack-webhook'),
+    path('payments/history/', PaymentTransactionHistoryView.as_view(), name='agent-payment-history'),
 
     # Property Listings Management & Media
     path('properties/', ListingListCreateView.as_view(), name='listing-list'),

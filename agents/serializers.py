@@ -75,7 +75,7 @@ class ListingSerializer(serializers.ModelSerializer):
         model = Listing
         fields = (
             'id', 'agent', 'agent_name', 'title', 'category', 'category_name', 'category_details',
-            'tag', 'tags', 'price', 'address', 'city', 'state', 'country',
+            'tag', 'tags', 'listing_type', 'rent_frequency', 'price', 'address', 'city', 'state', 'country',
             'latitude', 'longitude', 'bedrooms', 'bathrooms', 'balconies',
             'total_rooms', 'facilities', 'status', 'is_published', 'is_boosted',
             'is_featured', 'is_saved', 'views_count', 'inquiries_count', 'cover_photo', 'cover_photo_url',
@@ -86,6 +86,22 @@ class ListingSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         if isinstance(data, dict):
             mutable_data = data.copy()
+
+            # Normalize listing_type and rent_frequency
+            listing_type = mutable_data.get('listing_type') or mutable_data.get('type')
+            if listing_type:
+                listing_type_clean = str(listing_type).strip().lower()
+                if listing_type_clean in ['buy', 'buying', 'for sale', 'sale']:
+                    mutable_data['listing_type'] = 'sale'
+                elif listing_type_clean in ['rent', 'rental', 'for rent']:
+                    mutable_data['listing_type'] = 'rent'
+                    if not mutable_data.get('rent_frequency'):
+                        mutable_data['rent_frequency'] = 'yearly'
+
+            rent_freq = mutable_data.get('rent_frequency')
+            if rent_freq:
+                mutable_data['rent_frequency'] = str(rent_freq).strip().lower()
+
             cat = mutable_data.get('category') or mutable_data.get('category_id')
             if cat:
                 import uuid
@@ -138,7 +154,13 @@ class ListingSerializer(serializers.ModelSerializer):
 
     def get_inquiries_count(self, obj):
         from chat.models import Message
-        return Message.objects.filter(listing=obj).count()
+        return Message.objects.filter(
+            listing=obj
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
 
     def _clean_media_path(self, url_str):
         if not url_str:

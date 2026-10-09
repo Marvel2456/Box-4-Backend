@@ -281,4 +281,11 @@ PREMBLY_APP_ID = os.getenv('PREMBLY_APP_ID')
 PREMBLY_ENVIRONMENT = os.getenv('PREMBLY_ENVIRONMENT', 'sandbox')
 
 
+# Paystack Payment Gateway Configuration
+PAYSTACK_SECRET_KEY = (os.getenv('PAYSTACK_SECRET_KEY') or '').strip()
+PAYSTACK_PUBLIC_KEY = (os.getenv('PAYSTACK_PUBLIC_KEY') or '').strip()
+PAYSTACK_API_URL = (os.getenv('PAYSTACK_API_URL') or 'https://api.paystack.co').strip().rstrip('/')
+
+
+
 

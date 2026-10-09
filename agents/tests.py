@@ -4,8 +4,8 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from unittest.mock import patch
 
-from profiles.models import Plan, AgentProfile
-from .models import Listing, ListingImage
+from profiles.models import Plan, BoostPlan, AgentProfile, AgentSubscription, ListingBoostPlacement, PaymentTransaction
+from .models import Listing, ListingImage, Category, Tag
 
 User = get_user_model()
 
@@ -473,7 +473,28 @@ class ListingAPITests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("KYC is not verified", str(res.data))
 
-    def test_agent_kyc_verification_flow_and_status(self):
+    @patch('core.prembly.PremblyService.verify_cac')
+    @patch('core.prembly.PremblyService.verify_nin')
+    def test_agent_kyc_verification_flow_and_status(self, mock_nin, mock_cac):
+        mock_nin.return_value = {
+            "status": True,
+            "verified": True,
+            "message": "NIN verified successfully",
+            "data": {
+                "firstname": "Kyc",
+                "surname": "Agent",
+                "nin": "12345678901"
+            }
+        }
+        mock_cac.return_value = {
+            "status": True,
+            "verified": True,
+            "message": "CAC verified successfully",
+            "data": {
+                "rc_number": "RC1234567",
+                "company_name": "Verified Properties Ltd"
+            }
+        }
         # 1. Unverified agent submits valid NIN and CAC
         agent = User.objects.create_user(
             email="kycagent@example.com",
@@ -828,4 +849,246 @@ class ListingAPITests(APITestCase):
         self.assertEqual(status_res.status_code, status.HTTP_200_OK)
         self.assertEqual(status_res.data['plan']['billing_cycle'], "yearly")
         self.assertGreaterEqual(status_res.data['days_left'], 360)
+
+
+class PaystackPaymentAPITests(APITestCase):
+    def setUp(self):
+        self.agent = User.objects.create_user(
+            email="payagent@example.com",
+            username="payagent@example.com",
+            password="securepassword123",
+            role="agent"
+        )
+        self.agent.is_email_verified = True
+        self.agent.save()
+
+        self.plan = Plan.objects.create(
+            name="Platinum Agency",
+            price=25000.00,
+            billing_cycle="monthly",
+            max_boosted=10,
+            has_verified_badge=True
+        )
+
+        self.boost_plan = BoostPlan.objects.create(
+            name="14 Days Fast Boost",
+            duration_days=14,
+            price=5000.00
+        )
+
+        category = Category.objects.create(name="Commercial")
+        self.listing = Listing.objects.create(
+            agent=self.agent,
+            title="Commercial Plaza",
+            category=category,
+            price=50000000.00,
+            address="Victoria Island",
+            latitude=6.4281,
+            longitude=3.4219,
+            is_published=True
+        )
+
+        self.initialize_url = reverse('payment-initialize')
+        self.verify_url = reverse('payment-verify')
+        self.webhook_url = reverse('paystack-webhook')
+        self.history_url = reverse('payment-history')
+
+    def get_jwt_token(self, email, password):
+        response = self.client.post(reverse('auth_login'), {"email": email, "password": password})
+        return response.data['access']
+
+    @patch('core.paystack.PaystackService.initialize_payment')
+    def test_initialize_subscription_payment(self, mock_paystack_init):
+        mock_paystack_init.return_value = {
+            'status': True,
+            'message': 'Authorization URL created',
+            'data': {
+                'authorization_url': 'https://checkout.paystack.com/mock-sub-url',
+                'access_code': 'mock_access_sub_123',
+                'reference': 'SUB_TEST_123'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        payload = {
+            "payment_type": "subscription",
+            "plan_id": str(self.plan.id),
+            "callback_url": "https://myapp.com/callback"
+        }
+        res = self.client.post(self.initialize_url, payload)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("authorization_url", res.data)
+        self.assertIn("access_code", res.data)
+        self.assertEqual(res.data['amount'], 25000.00)
+        self.assertEqual(res.data['currency'], "NGN")
+
+        # Verify transaction record created in DB
+        tx = PaymentTransaction.objects.filter(user=self.agent, transaction_type='subscription').first()
+        self.assertIsNotNone(tx)
+        self.assertEqual(tx.status, 'pending')
+        self.assertEqual(tx.plan, self.plan)
+
+    @patch('core.paystack.PaystackService.initialize_payment')
+    def test_initialize_listing_boost_payment(self, mock_paystack_init):
+        mock_paystack_init.return_value = {
+            'status': True,
+            'message': 'Authorization URL created',
+            'data': {
+                'authorization_url': 'https://checkout.paystack.com/mock-boost-url',
+                'access_code': 'mock_access_boost_123',
+                'reference': 'BOOST_TEST_123'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        payload = {
+            "payment_type": "boost",
+            "listing_id": str(self.listing.id),
+            "boost_plan_id": str(self.boost_plan.id)
+        }
+        res = self.client.post(self.initialize_url, payload)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['amount'], 5000.00)
+
+        tx = PaymentTransaction.objects.filter(user=self.agent, transaction_type='boost').first()
+        self.assertIsNotNone(tx)
+        self.assertEqual(tx.listing, self.listing)
+        self.assertEqual(tx.boost_plan, self.boost_plan)
+
+    @patch('core.paystack.PaystackService.verify_payment')
+    def test_verify_subscription_payment_success(self, mock_paystack_verify):
+        # Create pending transaction
+        ref = "SUB_VERIFY_12345"
+        tx = PaymentTransaction.objects.create(
+            user=self.agent,
+            reference=ref,
+            transaction_type='subscription',
+            amount=25000.00,
+            plan=self.plan,
+            status='pending'
+        )
+
+        mock_paystack_verify.return_value = {
+            'status': True,
+            'message': 'Verification successful',
+            'data': {
+                'status': 'success',
+                'reference': ref,
+                'amount': 2500000,
+                'channel': 'card',
+                'currency': 'NGN',
+                'gateway_response': 'Successful'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        res = self.client.post(self.verify_url, {"reference": ref})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'success')
+        self.assertEqual(res.data['subscription']['plan_name'], "Platinum Agency")
+
+        # Verify DB records updated
+        tx.refresh_from_db()
+        self.assertEqual(tx.status, 'success')
+        self.assertIsNotNone(tx.paid_at)
+
+        self.agent.agent_profile.refresh_from_db()
+        self.assertEqual(self.agent.agent_profile.plan, self.plan)
+        self.assertTrue(self.agent.agent_profile.is_verified)
+
+    @patch('core.paystack.PaystackService.verify_payment')
+    def test_verify_boost_payment_success(self, mock_paystack_verify):
+        ref = "BOOST_VERIFY_99887"
+        tx = PaymentTransaction.objects.create(
+            user=self.agent,
+            reference=ref,
+            transaction_type='boost',
+            amount=5000.00,
+            listing=self.listing,
+            boost_plan=self.boost_plan,
+            status='pending'
+        )
+
+        mock_paystack_verify.return_value = {
+            'status': True,
+            'data': {
+                'status': 'success',
+                'reference': ref,
+                'amount': 500000,
+                'channel': 'card',
+                'currency': 'NGN',
+                'gateway_response': 'Successful'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        res = self.client.post(self.verify_url, {"reference": ref})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data['status'], 'success')
+        self.assertTrue(res.data['boost']['is_boosted'])
+
+        # Verify listing is boosted
+        self.listing.refresh_from_db()
+        self.assertTrue(self.listing.is_boosted)
+
+        # Verify placement created
+        placement = ListingBoostPlacement.objects.filter(listing=self.listing, status='active').first()
+        self.assertIsNotNone(placement)
+        self.assertEqual(placement.duration_days, 14)
+
+    def test_paystack_webhook_charge_success(self):
+        ref = "WEBHOOK_TX_776655"
+        tx = PaymentTransaction.objects.create(
+            user=self.agent,
+            reference=ref,
+            transaction_type='subscription',
+            amount=25000.00,
+            plan=self.plan,
+            status='pending'
+        )
+
+        webhook_payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": ref,
+                "amount": 2500000,
+                "status": "success",
+                "channel": "card"
+            }
+        }
+
+        res = self.client.post(self.webhook_url, webhook_payload, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        tx.refresh_from_db()
+        self.assertEqual(tx.status, 'success')
+        self.agent.agent_profile.refresh_from_db()
+        self.assertEqual(self.agent.agent_profile.plan, self.plan)
+
+    def test_payment_transaction_history(self):
+        PaymentTransaction.objects.create(
+            user=self.agent,
+            reference="HIST_TX_001",
+            transaction_type='subscription',
+            amount=25000.00,
+            plan=self.plan,
+            status='success'
+        )
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        res = self.client.get(self.history_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        data = res.data['results'] if 'results' in res.data else res.data
+        self.assertTrue(any(t['reference'] == "HIST_TX_001" for t in data))
+
 

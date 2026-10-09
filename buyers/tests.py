@@ -134,7 +134,23 @@ class BuyerAPITests(APITestCase):
         self.assertEqual(len(res_loc.data['results']), 1)
         self.assertEqual(res_loc.data['results'][0]['title'], "Yaba Apartment")
 
-        # 5. Buyers Category & Tag list endpoints
+        # 5. Filter by Listing Type (Rent vs Sale/Buy)
+        self.listing_b.listing_type = 'rent'
+        self.listing_b.rent_frequency = 'yearly'
+        self.listing_b.save()
+
+        res_rent = self.client.get(self.search_url, {"listing_type": "rent"})
+        self.assertEqual(res_rent.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_rent.data['results']), 1)
+        self.assertEqual(res_rent.data['results'][0]['title'], "Yaba Apartment")
+        self.assertEqual(res_rent.data['results'][0]['listing_type'], "rent")
+        self.assertEqual(res_rent.data['results'][0]['rent_frequency'], "yearly")
+
+        res_sale = self.client.get(self.search_url, {"listing_type": "sale"})
+        self.assertEqual(res_sale.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res_sale.data['results']), 2)
+
+        # 6. Buyers Category & Tag list endpoints
         cat_res = self.client.get(reverse('buyer-categories'))
         self.assertEqual(cat_res.status_code, status.HTTP_200_OK)
         self.assertGreaterEqual(len(cat_res.data), 3)
