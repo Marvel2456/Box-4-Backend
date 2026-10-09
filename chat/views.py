@@ -10,7 +10,7 @@ from django.conf import settings
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .models import ChatRoom, Message
+from .models import ChatRoom, Message, BlockedUser
 from .serializers import (
     MessageSerializer, 
     InitiateChatSerializer, 
@@ -19,9 +19,13 @@ from .serializers import (
     ContactAgentResponseSerializer,
     MarkReadSerializer,
     UnreadCountSerializer,
-    PusherAuthSerializer
+    PusherAuthSerializer,
+    BlockUserSerializer,
+    UnblockUserSerializer,
+    BlockedUserItemSerializer,
+    SubmitReportSerializer
 )
-from agents.models import Listing
+from agents.models import Listing, Report
 from core.firebase import send_push_notification
 
 User = get_user_model()
@@ -122,6 +126,177 @@ class PusherAuthView(generics.GenericAPIView):
             )
 
 
+class BlockUserView(generics.GenericAPIView):
+    """
+    Block an abusive or unwanted user.
+    """
+    serializer_class = BlockUserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=BlockUserSerializer,
+        responses={200: openapi.Response(description="User blocked successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        target_user_id = serializer.validated_data['user_id']
+        reason = serializer.validated_data.get('reason', '')
+
+        if str(request.user.id) == str(target_user_id):
+            return Response({"error": "You cannot block yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            target_user = User.objects.get(id=target_user_id)
+        except (User.DoesNotExist, ValueError):
+            return Response({"error": "Target user not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        block_obj, created = BlockedUser.objects.get_or_create(
+            blocker=request.user,
+            blocked=target_user,
+            defaults={'reason': reason}
+        )
+        if not created and reason:
+            block_obj.reason = reason
+            block_obj.save(update_fields=['reason'])
+
+        return Response({
+            "message": f"Successfully blocked {target_user.full_name or target_user.email}.",
+            "blocked_user_id": str(target_user.id)
+        }, status=status.HTTP_200_OK)
+
+
+class UnblockUserView(generics.GenericAPIView):
+    """
+    Unblock a previously blocked user.
+    """
+    serializer_class = UnblockUserSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=UnblockUserSerializer,
+        responses={200: openapi.Response(description="User unblocked successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        target_user_id = serializer.validated_data['user_id']
+        deleted_count, _ = BlockedUser.objects.filter(blocker=request.user, blocked_id=target_user_id).delete()
+
+        return Response({
+            "message": "User unblocked successfully.",
+            "unblocked_user_id": str(target_user_id),
+            "unblocked": deleted_count > 0
+        }, status=status.HTTP_200_OK)
+
+
+class BlockedUsersListView(generics.GenericAPIView):
+    """
+    List all users blocked by the authenticated user.
+    """
+    serializer_class = BlockedUserItemSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(responses={200: BlockedUserItemSerializer(many=True)})
+    def get(self, request, *args, **kwargs):
+        blocks = BlockedUser.objects.filter(blocker=request.user).select_related('blocked').order_by('-created_at')
+
+        results = []
+        for b in blocks:
+            user = b.blocked
+            pic = None
+            if hasattr(user, 'agent_profile') and user.agent_profile.profile_picture:
+                pic = request.build_absolute_uri(user.agent_profile.profile_picture.url)
+            elif hasattr(user, 'buyer_profile') and user.buyer_profile.profile_picture:
+                pic = request.build_absolute_uri(user.buyer_profile.profile_picture.url)
+
+            results.append({
+                "id": str(user.id),
+                "email": user.email,
+                "full_name": user.full_name or user.email,
+                "role": user.role,
+                "profile_picture": pic,
+                "reason": b.reason,
+                "blocked_at": b.created_at.isoformat()
+            })
+
+        return Response(results, status=status.HTTP_200_OK)
+
+
+class SubmitReportView(generics.GenericAPIView):
+    """
+    Report an abusive user, message, or fraudulent property listing (App Store Guideline 1.2).
+    """
+    serializer_class = SubmitReportSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        request_body=SubmitReportSerializer,
+        responses={201: openapi.Response(description="Report submitted successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        report_type = serializer.validated_data.get('report_type', 'message')
+        message_id = serializer.validated_data.get('message_id')
+        reported_user_id = serializer.validated_data.get('reported_user_id')
+        listing_id = serializer.validated_data.get('listing_id')
+        reason = serializer.validated_data.get('reason')
+        description = serializer.validated_data.get('description', '')
+
+        message_obj = None
+        reported_user = None
+        listing_obj = None
+
+        if message_id:
+            try:
+                message_obj = Message.objects.get(id=message_id)
+                reported_user = message_obj.sender
+                listing_obj = message_obj.listing
+                report_type = 'message'
+            except (Message.DoesNotExist, ValueError):
+                return Response({"error": "Referenced message not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if reported_user_id and not reported_user:
+            try:
+                reported_user = User.objects.get(id=reported_user_id)
+            except (User.DoesNotExist, ValueError):
+                return Response({"error": "Reported user not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if listing_id and not listing_obj:
+            try:
+                listing_obj = Listing.objects.get(id=listing_id)
+                if not reported_user:
+                    reported_user = listing_obj.agent
+            except (Listing.DoesNotExist, ValueError):
+                return Response({"error": "Reported listing not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if reported_user and reported_user == request.user:
+            return Response({"error": "You cannot submit a report against yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create Report record for admin moderation
+        report = Report.objects.create(
+            report_type=report_type,
+            reason=reason,
+            description=description,
+            reporter=request.user,
+            reported_user=reported_user,
+            listing=listing_obj,
+            message=message_obj,
+            status='pending'
+        )
+
+        return Response({
+            "message": "Report submitted successfully. Our moderation team will review this report shortly.",
+            "report_id": str(report.id),
+            "status": report.status,
+            "created_at": report.created_at.isoformat()
+        }, status=status.HTTP_201_CREATED)
+
+
 class ChatViewSet(viewsets.GenericViewSet):
     serializer_class = MessageSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -137,6 +312,39 @@ class ChatViewSet(viewsets.GenericViewSet):
     def pusher_auth(self, request):
         auth_view = PusherAuthView.as_view()
         return auth_view(request._request)
+
+    @swagger_auto_schema(
+        request_body=BlockUserSerializer,
+        responses={200: openapi.Response(description="User blocked successfully")}
+    )
+    @action(detail=False, methods=['post'], url_path='block')
+    def block_user(self, request):
+        view = BlockUserView.as_view()
+        return view(request._request)
+
+    @swagger_auto_schema(
+        request_body=UnblockUserSerializer,
+        responses={200: openapi.Response(description="User unblocked successfully")}
+    )
+    @action(detail=False, methods=['post'], url_path='unblock')
+    def unblock_user(self, request):
+        view = UnblockUserView.as_view()
+        return view(request._request)
+
+    @swagger_auto_schema(responses={200: BlockedUserItemSerializer(many=True)})
+    @action(detail=False, methods=['get'], url_path='blocked')
+    def blocked_users(self, request):
+        view = BlockedUsersListView.as_view()
+        return view(request._request)
+
+    @swagger_auto_schema(
+        request_body=SubmitReportSerializer,
+        responses={201: openapi.Response(description="Report submitted successfully")}
+    )
+    @action(detail=False, methods=['post'], url_path='report')
+    def submit_report(self, request):
+        view = SubmitReportView.as_view()
+        return view(request._request)
 
     @swagger_auto_schema(request_body=SendMessageSerializer, responses={201: MessageSerializer})
     @action(detail=False, methods=['post'])
@@ -170,6 +378,19 @@ class ChatViewSet(viewsets.GenericViewSet):
 
         if receiver == request.user:
             return Response({"error": "You cannot send messages to yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Enforce Apple Guideline 1.2 User Blocking Rules
+        if BlockedUser.objects.filter(blocker=receiver, blocked=request.user).exists():
+            return Response(
+                {"error": "You have been blocked by this user and cannot send messages to them."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if BlockedUser.objects.filter(blocker=request.user, blocked=receiver).exists():
+            return Response(
+                {"error": "You have blocked this user. Unblock them to send messages."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         listing_obj = None
         if listing_id:
@@ -293,7 +514,11 @@ class ChatViewSet(viewsets.GenericViewSet):
     @swagger_auto_schema(
         responses={200: MessageSerializer(many=True)},
         manual_parameters=[
-            openapi.Parameter('identifier', openapi.IN_PATH, description="UUID of the chat partner or ChatRoom ID", type=openapi.TYPE_STRING)
+            openapi.Parameter('identifier', openapi.IN_PATH, description="UUID of the chat partner or ChatRoom ID", type=openapi.TYPE_STRING),
+            openapi.Parameter('page', openapi.IN_QUERY, description="Page number for pagination", type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('page_size', openapi.IN_QUERY, description="Number of messages per page (default: 50, max: 100)", type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('limit', openapi.IN_QUERY, description="Limit number of messages returned", type=openapi.TYPE_INTEGER, required=False),
+            openapi.Parameter('before', openapi.IN_QUERY, description="Message UUID cursor to fetch older messages before", type=openapi.TYPE_STRING, required=False),
         ]
     )
     @action(detail=False, methods=['get'], url_path='history/(?P<identifier>[^/.]+)')
@@ -320,7 +545,7 @@ class ChatViewSet(viewsets.GenericViewSet):
         if not room:
             return Response([], status=status.HTTP_200_OK)
 
-        messages = room.messages.all().order_by('timestamp')
+        messages_qs = room.messages.all().select_related('sender', 'receiver', 'listing', 'chatroom').order_by('timestamp')
 
         # Automatically mark unread messages received by request.user as read
         unread_messages = room.messages.filter(receiver=request.user, is_read=False)
@@ -387,7 +612,54 @@ class ChatViewSet(viewsets.GenericViewSet):
                 except Exception:
                     pass
 
-        serializer = MessageSerializer(messages, many=True)
+        # Check for pagination / cursor query params
+        page_num = request.query_params.get('page')
+        page_size = request.query_params.get('page_size') or request.query_params.get('limit')
+        before_id = request.query_params.get('before') or request.query_params.get('before_id')
+
+        if before_id:
+            try:
+                ref_msg = Message.objects.get(id=before_id)
+                messages_qs = messages_qs.filter(timestamp__lt=ref_msg.timestamp)
+            except Exception:
+                pass
+
+        if page_num or page_size or before_id:
+            try:
+                size = min(int(page_size), 100) if page_size else 50
+            except (ValueError, TypeError):
+                size = 50
+
+            if page_num:
+                try:
+                    p = max(int(page_num), 1)
+                except (ValueError, TypeError):
+                    p = 1
+                total = messages_qs.count()
+                start = (p - 1) * size
+                end = start + size
+                paged_messages = list(messages_qs[start:end])
+                serializer = MessageSerializer(paged_messages, many=True)
+                return Response({
+                    "count": total,
+                    "page": p,
+                    "page_size": size,
+                    "has_next": end < total,
+                    "has_previous": p > 1,
+                    "results": serializer.data
+                }, status=status.HTTP_200_OK)
+            elif before_id or page_size:
+                total = messages_qs.count()
+                paged_messages = list(messages_qs.order_by('-timestamp')[:size])
+                paged_messages.reverse()
+                serializer = MessageSerializer(paged_messages, many=True)
+                return Response({
+                    "count": total,
+                    "page_size": size,
+                    "results": serializer.data
+                }, status=status.HTTP_200_OK)
+
+        serializer = MessageSerializer(messages_qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(responses={200: ConversationPreviewSerializer(many=True)})
@@ -418,6 +690,23 @@ class ChatViewSet(viewsets.GenericViewSet):
             elif hasattr(partner, 'buyer_profile') and partner.buyer_profile.profile_picture:
                 profile_pic = request.build_absolute_uri(partner.buyer_profile.profile_picture.url)
 
+            is_blocked_by_me = BlockedUser.objects.filter(blocker=user, blocked=partner).exists()
+            is_blocked_by_them = BlockedUser.objects.filter(blocker=partner, blocked=user).exists()
+            is_blocked = is_blocked_by_me or is_blocked_by_them
+
+            # Robust listing resolution so listing_title is never null if conversation began from a listing
+            listing = room.listing
+            if not listing and last_msg and last_msg.listing:
+                listing = last_msg.listing
+                room.listing = listing
+                room.save(update_fields=['listing'])
+            if not listing:
+                msg_with_listing = room.messages.filter(listing__isnull=False).order_by('-timestamp').first()
+                if msg_with_listing:
+                    listing = msg_with_listing.listing
+                    room.listing = listing
+                    room.save(update_fields=['listing'])
+
             results.append({
                 "chatroom_id": str(room.id),
                 "channel_name": room.channel_name,
@@ -427,13 +716,16 @@ class ChatViewSet(viewsets.GenericViewSet):
                     "email": partner.email,
                     "full_name": partner.full_name or partner.email,
                     "role": partner.role,
-                    "profile_picture": profile_pic
+                    "profile_picture": profile_pic,
+                    "is_blocked": is_blocked,
+                    "is_blocked_by_me": is_blocked_by_me
                 },
                 "last_message": last_msg.message if last_msg else "",
                 "last_message_time": last_msg.timestamp.isoformat() if last_msg else room.created_at.isoformat(),
                 "unread_count": unread_count,
-                "listing_id": str(room.listing.id) if room.listing else None,
-                "listing_title": room.listing.title if room.listing else None,
+                "listing_id": str(listing.id) if listing else None,
+                "listing_title": listing.title if listing else None,
+                "is_blocked": is_blocked
             })
 
         # Sort by last message time descending
@@ -586,6 +878,19 @@ class ContactAgentView(generics.GenericAPIView):
 
         if receiver == request.user:
             return Response({"error": "You cannot initiate a chat conversation with yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Enforce Apple Guideline 1.2 User Blocking Rules
+        if BlockedUser.objects.filter(blocker=receiver, blocked=request.user).exists():
+            return Response(
+                {"error": "You have been blocked by this agent and cannot contact them."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if BlockedUser.objects.filter(blocker=request.user, blocked=receiver).exists():
+            return Response(
+                {"error": "You have blocked this agent. Unblock them to send inquiries."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Build initial message
         if custom_message and custom_message.strip():

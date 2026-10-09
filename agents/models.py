@@ -147,6 +147,7 @@ class Report(models.Model):
     REPORT_TYPE_CHOICES = (
         ('listing', 'Reported Listing'),
         ('user', 'Reported User'),
+        ('message', 'Reported Message'),
         ('auto_fraud', 'Auto Fraud Flag'),
     )
     STATUS_CHOICES = (
@@ -162,6 +163,7 @@ class Report(models.Model):
 
     listing = models.ForeignKey(Listing, on_delete=models.CASCADE, null=True, blank=True, related_name='reports')
     reported_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True, related_name='reports_against')
+    message = models.ForeignKey('chat.Message', on_delete=models.SET_NULL, null=True, blank=True, related_name='reports')
     reporter = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True, related_name='filed_reports')
 
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')

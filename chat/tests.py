@@ -5,9 +5,9 @@ from rest_framework.test import APITestCase
 from django.test import override_settings
 from unittest.mock import patch
 
-from agents.models import Listing, Category
+from agents.models import Listing, Category, Report
 from profiles.models import Plan
-from .models import ChatRoom, Message
+from .models import ChatRoom, Message, BlockedUser
 
 User = get_user_model()
 
@@ -64,6 +64,10 @@ class ChatAPITests(APITestCase):
         self.mark_read_url = reverse('chat-messages-mark-read')
         self.unread_count_url = reverse('chat-messages-unread-count')
         self.pusher_auth_url = reverse('pusher-auth')
+        self.block_url = reverse('chat-user-block')
+        self.unblock_url = reverse('chat-user-unblock')
+        self.blocked_list_url = reverse('chat-users-blocked')
+        self.report_url = reverse('chat-submit-report')
 
     def get_jwt_token(self, email, password):
         response = self.client.post(reverse('auth_login'), {"email": email, "password": password})
@@ -124,6 +128,7 @@ class ChatAPITests(APITestCase):
         self.assertEqual(conv_res.data[0]['unread_count'], 2)
         self.assertEqual(conv_res.data[0]['channel_name'], room.channel_name)
         self.assertEqual(conv_res.data[0]['event'], "new_message")
+        self.assertFalse(conv_res.data[0]['is_blocked'])
 
         # Verify unread_count matches sum of conversations unread_count
         sum_unread = sum(c['unread_count'] for c in conv_res.data)
@@ -189,6 +194,133 @@ class ChatAPITests(APITestCase):
         })
         self.assertEqual(forbidden_room_res.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_block_unblock_and_list_blocked_users(self):
+        token = self.get_jwt_token("chatagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Block buyer
+        block_res = self.client.post(self.block_url, {
+            "user_id": str(self.buyer_user.id),
+            "reason": "Harassment and spam messages"
+        })
+        self.assertEqual(block_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(block_res.data['blocked_user_id'], str(self.buyer_user.id))
+        self.assertTrue(BlockedUser.objects.filter(blocker=self.agent_user, blocked=self.buyer_user).exists())
+
+        # 2. Cannot block oneself
+        self_block_res = self.client.post(self.block_url, {
+            "user_id": str(self.agent_user.id)
+        })
+        self.assertEqual(self_block_res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 3. List blocked users
+        list_res = self.client.get(self.blocked_list_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(list_res.data), 1)
+        self.assertEqual(list_res.data[0]['id'], str(self.buyer_user.id))
+        self.assertEqual(list_res.data[0]['reason'], "Harassment and spam messages")
+
+        # 4. Unblock buyer
+        unblock_res = self.client.post(self.unblock_url, {
+            "user_id": str(self.buyer_user.id)
+        })
+        self.assertEqual(unblock_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(unblock_res.data['unblocked'])
+        self.assertFalse(BlockedUser.objects.filter(blocker=self.agent_user, blocked=self.buyer_user).exists())
+
+        # 5. List is now empty
+        list_res2 = self.client.get(self.blocked_list_url)
+        self.assertEqual(len(list_res2.data), 0)
+
+    @override_settings(PUSHER_APP_ID='123456', PUSHER_KEY='test_key', PUSHER_SECRET='test_secret')
+    @patch('core.firebase.send_push_notification')
+    @patch('pusher.Pusher.trigger')
+    def test_blocked_user_cannot_send_messages_or_inquiries(self, mock_trigger, mock_fcm):
+        # Agent blocks buyer
+        BlockedUser.objects.create(
+            blocker=self.agent_user,
+            blocked=self.buyer_user,
+            reason="Abusive behavior"
+        )
+
+        buyer_token = self.get_jwt_token("chatbuyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {buyer_token}')
+
+        # 1. Buyer attempts to send message to Agent -> 403 Forbidden
+        send_res = self.client.post(self.send_url, {
+            "receiver_id": str(self.agent_user.id),
+            "message": "Hello Agent"
+        })
+        self.assertEqual(send_res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("blocked", send_res.data['error'].lower())
+
+        # 2. Buyer attempts to contact Agent via listing -> 403 Forbidden
+        contact_res = self.client.post(self.contact_agent_url, {
+            "listing_id": str(self.listing.id),
+            "message": "Interested in property"
+        })
+        self.assertEqual(contact_res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("blocked", contact_res.data['error'].lower())
+
+        # 3. Agent (blocker) attempts to message buyer -> 400 Bad Request (prompting to unblock first)
+        agent_token = self.get_jwt_token("chatagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {agent_token}')
+        agent_send_res = self.client.post(self.send_url, {
+            "receiver_id": str(self.buyer_user.id),
+            "message": "Hello Buyer"
+        })
+        self.assertEqual(agent_send_res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("unblock", agent_send_res.data['error'].lower())
+
+    def test_report_message_user_and_listing(self):
+        buyer_token = self.get_jwt_token("chatbuyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {buyer_token}')
+
+        room = ChatRoom.get_or_create_room(self.buyer_user, self.agent_user, self.listing)
+        msg = Message.objects.create(
+            chatroom=room,
+            sender=self.agent_user,
+            receiver=self.buyer_user,
+            listing=self.listing,
+            message="Offensive message content"
+        )
+
+        # 1. Report Message
+        rep_msg_res = self.client.post(self.report_url, {
+            "report_type": "message",
+            "message_id": str(msg.id),
+            "reason": "Offensive / Inappropriate Language",
+            "description": "Agent was using abusive words in chat."
+        })
+        self.assertEqual(rep_msg_res.status_code, status.HTTP_201_CREATED)
+        self.assertIn("report_id", rep_msg_res.data)
+
+        report = Report.objects.get(id=rep_msg_res.data['report_id'])
+        self.assertEqual(report.report_type, 'message')
+        self.assertEqual(report.reported_user, self.agent_user)
+        self.assertEqual(report.reporter, self.buyer_user)
+        self.assertEqual(report.message, msg)
+        self.assertEqual(report.status, 'pending')
+
+        # 2. Report User Directly
+        rep_user_res = self.client.post(self.report_url, {
+            "report_type": "user",
+            "reported_user_id": str(self.agent_user.id),
+            "reason": "Fraud / Scam",
+            "description": "Suspicious fraudulent activity."
+        })
+        self.assertEqual(rep_user_res.status_code, status.HTTP_201_CREATED)
+        user_report = Report.objects.get(id=rep_user_res.data['report_id'])
+        self.assertEqual(user_report.reported_user, self.agent_user)
+
+        # 3. Cannot report oneself
+        self_rep_res = self.client.post(self.report_url, {
+            "report_type": "user",
+            "reported_user_id": str(self.buyer_user.id),
+            "reason": "Spam"
+        })
+        self.assertEqual(self_rep_res.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_deleted_user_messages_excluded_from_unread_count_and_conversations(self):
         # 1. Create a message from buyer to agent
         room = ChatRoom.get_or_create_room(self.buyer_user, self.agent_user, self.listing)
@@ -218,3 +350,43 @@ class ChatAPITests(APITestCase):
         # 4. Conversations endpoint excludes conversations with deleted user
         conv_res = self.client.get(self.conversations_url)
         self.assertEqual(len(conv_res.data), 0)
+
+    def test_listing_title_preservation_and_history_pagination(self):
+        token = self.get_jwt_token("chatbuyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Contact agent with listing
+        contact_res = self.client.post(self.contact_agent_url, {
+            "listing_id": str(self.listing.id),
+            "message": f"Hi, I'm interested in {self.listing.title}"
+        })
+        self.assertEqual(contact_res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(contact_res.data['chat_message']['listing_title'], "Chat Property")
+
+        # 2. Check conversations list: listing_title must match "Chat Property"
+        conv_res = self.client.get(self.conversations_url)
+        self.assertEqual(conv_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(conv_res.data[0]['listing_title'], "Chat Property")
+        self.assertEqual(conv_res.data[0]['listing_id'], str(self.listing.id))
+
+        # 3. Add more messages for pagination testing
+        room_id = contact_res.data['chatroom_id']
+        for i in range(5):
+            self.client.post(self.send_url, {
+                "chatroom_id": room_id,
+                "message": f"Message number {i + 1}"
+            })
+
+        # 4. Test history with pagination: ?page=1&page_size=3
+        hist_url = reverse('chat-messages-history', kwargs={'identifier': room_id})
+        paged_res = self.client.get(f"{hist_url}?page=1&page_size=3")
+        self.assertEqual(paged_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(paged_res.data['count'], 6)
+        self.assertEqual(len(paged_res.data['results']), 3)
+        self.assertTrue(paged_res.data['has_next'])
+        self.assertFalse(paged_res.data['has_previous'])
+
+        # 5. Test history with limit: ?limit=2
+        limit_res = self.client.get(f"{hist_url}?limit=2")
+        self.assertEqual(limit_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(limit_res.data['results']), 2)

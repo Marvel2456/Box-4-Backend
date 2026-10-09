@@ -489,6 +489,8 @@ class AdminReportItemSerializer(serializers.Serializer):
     id = serializers.UUIDField()
     listing_id = serializers.UUIDField(source='listing.id', default=None)
     listing_title = serializers.CharField(source='listing.title', default=None)
+    message_id = serializers.UUIDField(source='message.id', default=None)
+    message_text = serializers.CharField(source='message.message', default=None)
     target_id = serializers.SerializerMethodField()
     report_type = serializers.CharField()
     reason = serializers.CharField()
@@ -503,6 +505,9 @@ class AdminReportItemSerializer(serializers.Serializer):
     def get_target_id(self, obj):
         if obj.listing:
             short_id = str(obj.listing.id).replace('-', '').upper()[:6]
+            return f"#{short_id}"
+        elif obj.message:
+            short_id = str(obj.message.id).replace('-', '').upper()[:6]
             return f"#{short_id}"
         elif obj.reported_user:
             short_id = str(obj.reported_user.id).replace('-', '').upper()[:6]

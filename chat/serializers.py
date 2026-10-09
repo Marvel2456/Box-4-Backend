@@ -56,6 +56,8 @@ class ChatPartnerSerializer(serializers.Serializer):
     full_name = serializers.CharField()
     role = serializers.CharField()
     profile_picture = serializers.URLField(allow_null=True)
+    is_blocked = serializers.BooleanField(default=False)
+    is_blocked_by_me = serializers.BooleanField(default=False)
 
 
 class ConversationPreviewSerializer(serializers.Serializer):
@@ -68,6 +70,7 @@ class ConversationPreviewSerializer(serializers.Serializer):
     unread_count = serializers.IntegerField(default=0)
     listing_id = serializers.UUIDField(allow_null=True, required=False)
     listing_title = serializers.CharField(allow_null=True, required=False)
+    is_blocked = serializers.BooleanField(default=False)
 
 
 class ContactAgentResponseSerializer(serializers.Serializer):
@@ -95,3 +98,38 @@ class UnreadCountSerializer(serializers.Serializer):
 class PusherAuthSerializer(serializers.Serializer):
     socket_id = serializers.CharField(required=True, help_text="Pusher client socket_id")
     channel_name = serializers.CharField(required=True, help_text="Channel name to authenticate (e.g., private-chat-<chatroom_id> or private-user-<user_id>)")
+
+
+class BlockUserSerializer(serializers.Serializer):
+    user_id = serializers.UUIDField(required=True, help_text="UUID of the user to block")
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=255, default="", help_text="Optional reason for blocking")
+
+
+class UnblockUserSerializer(serializers.Serializer):
+    user_id = serializers.UUIDField(required=True, help_text="UUID of the user to unblock")
+
+
+class BlockedUserItemSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    email = serializers.EmailField()
+    full_name = serializers.CharField()
+    role = serializers.CharField()
+    profile_picture = serializers.URLField(allow_null=True)
+    reason = serializers.CharField(allow_null=True, allow_blank=True)
+    blocked_at = serializers.DateTimeField()
+
+
+class SubmitReportSerializer(serializers.Serializer):
+    REPORT_TYPE_CHOICES = ('message', 'user', 'listing')
+
+    report_type = serializers.ChoiceField(choices=REPORT_TYPE_CHOICES, default='message', help_text="Type of report: 'message', 'user', or 'listing'")
+    reported_user_id = serializers.UUIDField(required=False, allow_null=True, help_text="UUID of reported user (optional if message_id provided)")
+    message_id = serializers.UUIDField(required=False, allow_null=True, help_text="UUID of reported message (optional)")
+    listing_id = serializers.UUIDField(required=False, allow_null=True, help_text="UUID of reported listing (optional)")
+    reason = serializers.CharField(required=True, max_length=255, help_text="Reason for the report (e.g. 'Harassment', 'Abuse', 'Spam', 'Fraud')")
+    description = serializers.CharField(required=False, allow_blank=True, default="", help_text="Detailed description of the issue")
+
+    def validate(self, attrs):
+        if not attrs.get('message_id') and not attrs.get('reported_user_id') and not attrs.get('listing_id'):
+            raise serializers.ValidationError("At least one target ('message_id', 'reported_user_id', or 'listing_id') must be provided.")
+        return attrs
