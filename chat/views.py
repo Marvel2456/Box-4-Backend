@@ -1,9 +1,12 @@
+import logging
+import json
 from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.core.serializers.json import DjangoJSONEncoder
 import pusher
 from django.conf import settings
 
@@ -29,6 +32,7 @@ from agents.models import Listing, Report
 from core.firebase import send_push_notification
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def get_configured_pusher_client():
@@ -41,7 +45,8 @@ def get_configured_pusher_client():
                 cluster=settings.PUSHER_CLUSTER,
                 ssl=True
             )
-        except Exception:
+        except Exception as e:
+            logger.error("Failed to initialize Pusher client: %s", str(e))
             return None
     return None
 
@@ -433,7 +438,8 @@ class ChatViewSet(viewsets.GenericViewSet):
         # Broadcast Pusher Real-Time Events
         pusher_client = self.get_pusher_client()
         if pusher_client:
-            message_payload = MessageSerializer(message).data
+            raw_data = MessageSerializer(message).data
+            message_payload = json.loads(json.dumps(raw_data, cls=DjangoJSONEncoder))
             try:
                 # 1. Broadcast to specific chatroom channel
                 pusher_client.trigger(
@@ -491,8 +497,8 @@ class ChatViewSet(viewsets.GenericViewSet):
                         'channel_name': room.channel_name
                     }
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Failed to broadcast Pusher new_message in send: %s", str(e), exc_info=True)
 
         # Dispatch FCM Push Notification in background
         send_push_notification(
@@ -937,7 +943,8 @@ class ContactAgentView(generics.GenericAPIView):
         # Trigger Pusher
         pusher_client = self.get_pusher_client()
         if pusher_client:
-            message_payload = MessageSerializer(message).data
+            raw_data = MessageSerializer(message).data
+            message_payload = json.loads(json.dumps(raw_data, cls=DjangoJSONEncoder))
             try:
                 # 1. Chatroom channel
                 pusher_client.trigger(
@@ -995,8 +1002,8 @@ class ContactAgentView(generics.GenericAPIView):
                         'channel_name': room.channel_name
                     }
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Failed to broadcast Pusher new_message in contact_agent: %s", str(e), exc_info=True)
 
         # Dispatch FCM Push Notification
         send_push_notification(

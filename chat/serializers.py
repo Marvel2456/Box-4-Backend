@@ -26,6 +26,14 @@ class MessageSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ('id', 'chatroom', 'sender', 'is_read', 'read_at', 'timestamp')
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Ensure UUID fields are converted to strings so standard JSON serializers (such as Pusher's) do not fail
+        for key in ['id', 'chatroom', 'sender', 'receiver', 'listing']:
+            if data.get(key) is not None:
+                data[key] = str(data[key])
+        return data
+
 
 class InitiateChatSerializer(serializers.Serializer):
     receiver_id = serializers.UUIDField(required=False)

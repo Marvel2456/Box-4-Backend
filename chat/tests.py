@@ -107,9 +107,10 @@ class ChatAPITests(APITestCase):
         }
         send_res = self.client.post(self.send_url, msg_data)
         self.assertEqual(send_res.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(send_res.data['channel_name'], room.channel_name)
-        self.assertEqual(send_res.data['event'], "new_message")
-        self.assertFalse(send_res.data['is_read'])
+        # Verify Pusher trigger was called with new_message on room channel and recipient private user channel
+        triggered_calls = [(call.args[0], call.args[1]) for call in mock_trigger.call_args_list]
+        self.assertIn((room.channel_name, 'new_message'), triggered_calls)
+        self.assertIn((f'private-user-{self.agent_user.id}', 'new_message'), triggered_calls)
 
         # 3. Verify Agent Unread Count & Conversations Match
         agent_token = self.get_jwt_token("chatagent@example.com", "securepassword123")
