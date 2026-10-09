@@ -46,6 +46,7 @@ urlpatterns = [
         path('profiles/', include('profiles.urls')),
         path('agents/', include('agents.urls')),
         path('buyers/', include('buyers.urls')),
+        path('payments/', include('agents.payment_urls')),
         path('chat/', include('chat.urls')),
         path('notifications/', include('notifications.urls')),
         path('admin-portal/', include('admin_portal.urls')),

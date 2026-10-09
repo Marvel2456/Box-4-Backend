@@ -145,3 +145,24 @@ class NotificationAPITests(APITestCase):
         device = DeviceToken.objects.get(token="fcm_sample_token_xyz_12345")
         self.assertFalse(device.is_active)
 
+    def test_deleted_user_notifications_excluded_from_unread_count(self):
+        token = self.get_jwt_token("notifagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # Initial unread count is 2 (from setUp)
+        res1 = self.client.get(self.unread_count_url)
+        self.assertEqual(res1.data['unread_count'], 2)
+
+        # Deactivate/delete buyer_user who was the sender
+        self.buyer_user.is_active = False
+        self.buyer_user.is_deleted = True
+        self.buyer_user.save()
+
+        # Unread count should now be 0 since sender is deleted
+        res2 = self.client.get(self.unread_count_url)
+        self.assertEqual(res2.data['unread_count'], 0)
+
+        # Notification list also excludes deleted user notifications
+        list_res = self.client.get(self.list_url)
+        self.assertEqual(list_res.data['count'], 0)
+

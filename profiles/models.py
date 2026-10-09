@@ -12,7 +12,7 @@ class Plan(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     billing_cycle = models.CharField(max_length=20, choices=BILLING_CYCLE_CHOICES, default='monthly')
@@ -30,6 +30,10 @@ class Plan(models.Model):
     is_popular = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ('name', 'billing_cycle')
+        ordering = ['price']
 
     def __str__(self):
         return f"{self.name} (N{self.price}/{self.billing_cycle})"
@@ -291,4 +295,44 @@ class ListingFeature(models.Model):
 
     def __str__(self):
         return f"Feature: {self.listing.title} - {self.featured_plan.name if self.featured_plan else 'Plan'}"
+
+
+class PaymentTransaction(models.Model):
+    TRANSACTION_TYPE_CHOICES = (
+        ('subscription', 'Agent Subscription'),
+        ('boost', 'Listing Boost'),
+        ('featured', 'Listing Featured'),
+    )
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('success', 'Success'),
+        ('failed', 'Failed'),
+        ('abandoned', 'Abandoned'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payment_transactions')
+    reference = models.CharField(max_length=100, unique=True, db_index=True)
+    transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10, default='NGN')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+
+    # Associated entities
+    plan = models.ForeignKey(Plan, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    boost_plan = models.ForeignKey(BoostPlan, on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+    listing = models.ForeignKey('agents.Listing', on_delete=models.SET_NULL, null=True, blank=True, related_name='transactions')
+
+    payment_channel = models.CharField(max_length=50, blank=True, null=True)
+    paystack_response = models.JSONField(default=dict, blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.email} - {self.reference} ({self.transaction_type} - {self.status})"
+
 

@@ -19,7 +19,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
         if getattr(self, 'swagger_fake_view', False):
             return Notification.objects.none()
         
-        queryset = Notification.objects.filter(recipient=self.request.user)
+        queryset = Notification.objects.filter(recipient=self.request.user).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        )
         
         notification_type = self.request.query_params.get('notification_type')
         is_read_param = self.request.query_params.get('is_read')
@@ -45,7 +49,14 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='unread-count')
     def unread_count(self, request):
-        count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+        count = Notification.objects.filter(
+            recipient=request.user, 
+            is_read=False
+        ).exclude(
+            sender__is_deleted=True
+        ).exclude(
+            sender__is_active=False
+        ).count()
         return Response({"unread_count": count}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['patch'], url_path='read')

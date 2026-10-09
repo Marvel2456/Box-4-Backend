@@ -2,8 +2,15 @@ from django.contrib import admin
 from unfold.admin import ModelAdmin
 from .models import (
     BuyerProfile, AgentProfile, AdminProfile, Plan, AgentKYC,
-    BoostPlan, ListingBoostPlacement, FeaturedPlan, ListingFeature, AgentSubscription
+    BoostPlan, ListingBoostPlacement, FeaturedPlan, ListingFeature, AgentSubscription,
+    PaymentTransaction
 )
+
+
+class PaymentTransactionAdmin(ModelAdmin):
+    list_display = ['reference', 'user', 'transaction_type', 'amount', 'currency', 'status', 'payment_channel', 'paid_at', 'created_at']
+    list_filter = ['status', 'transaction_type', 'currency', 'created_at']
+    search_fields = ['reference', 'user__email', 'user__full_name']
 
 
 class AgentKYCAdmin(ModelAdmin):
@@ -64,6 +71,7 @@ class AdminProfileAdmin(ModelAdmin):
     search_fields = ['user__email', 'phone_number']
 
 
+admin.site.register(PaymentTransaction, PaymentTransactionAdmin)
 admin.site.register(Plan, PlanAdmin)
 admin.site.register(BoostPlan, BoostPlanAdmin)
 admin.site.register(FeaturedPlan, FeaturedPlanAdmin)
