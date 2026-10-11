@@ -125,11 +125,12 @@ class PaystackService:
         """
         Verify HMAC SHA512 signature from Paystack webhook.
         """
-        if not self.is_configured or not signature_header:
+        secret_key = getattr(settings, 'PAYSTACK_SECRET_KEY', '') or self.secret_key
+        if not secret_key or not signature_header:
             return False
 
         computed_signature = hmac.new(
-            self.secret_key.encode('utf-8'),
+            secret_key.encode('utf-8'),
             payload_bytes,
             hashlib.sha512
         ).hexdigest()

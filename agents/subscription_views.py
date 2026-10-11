@@ -54,9 +54,16 @@ class AgentBoostPlanListView(generics.ListAPIView):
     List all active Pay-As-You-Boost duration packages available for agents.
     """
     permission_classes = [permissions.AllowAny]
-    queryset = BoostPlan.objects.filter(is_active=True).order_by('duration_days', 'price')
     serializer_class = AgentBoostPlanSerializer
     pagination_class = None
+
+    def get_queryset(self):
+        from agents.utils import get_default_boost_plan
+        qs = BoostPlan.objects.filter(is_active=True).order_by('duration_days', 'price')
+        if not qs.exists():
+            get_default_boost_plan()
+            qs = BoostPlan.objects.filter(is_active=True).order_by('duration_days', 'price')
+        return qs
 
     @swagger_auto_schema(
         operation_description="Get all available Pay-As-You-Boost duration packages with pricing and duration in days.",

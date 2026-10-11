@@ -65,8 +65,8 @@ class PaymentInitializeRequestSerializer(serializers.Serializer):
                 except BoostPlan.DoesNotExist:
                     raise serializers.ValidationError({"boost_plan_id": "Selected boost plan does not exist or is inactive."})
             else:
-                boost_plan = BoostPlan.objects.filter(is_active=True).first()
-                attrs['boost_plan_obj'] = boost_plan
+                from agents.utils import get_default_boost_plan
+                attrs['boost_plan_obj'] = get_default_boost_plan()
 
         return attrs
 

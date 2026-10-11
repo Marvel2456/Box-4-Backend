@@ -50,9 +50,15 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 
 class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Listing.objects.filter(is_published=True).select_related('category', 'agent').prefetch_related('tag', 'images')
     serializer_class = ListingSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        from agents.utils import expire_outdated_boosts
+        expire_outdated_boosts()
+        return Listing.objects.filter(is_published=True).select_related(
+            'category', 'agent'
+        ).prefetch_related('tag', 'images').order_by('-is_featured', '-is_boosted', '-created_at')
 
     @swagger_auto_schema(
         operation_description="Search and filter published property listings for mobile buyers.",

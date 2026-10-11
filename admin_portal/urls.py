@@ -30,6 +30,7 @@ from .views import (
     AdminPlanDetailView,
     AdminBoostPlanListCreateView,
     AdminBoostPlanDetailView,
+    AdminBoostFeeSettingView,
     AdminBoostPlacementsListView,
     AdminRevenueOverviewView,
     AdminFeaturedPlansListView,
@@ -109,6 +110,8 @@ urlpatterns = [
     path('finance/revenue-overview/', AdminRevenueOverviewView.as_view(), name='admin-finance-revenue-overview'),
 
     # Finance: Boost Plans & Boost Placements
+    path('boost-fee/', AdminBoostFeeSettingView.as_view(), name='admin-boost-fee'),
+    path('finance/boost-fee/', AdminBoostFeeSettingView.as_view(), name='admin-finance-boost-fee'),
     path('boost-plans/', AdminBoostPlanListCreateView.as_view(), name='admin-boost-plans-list-create'),
     path('boost-plans/<uuid:pk>/', AdminBoostPlanDetailView.as_view(), name='admin-boost-plans-detail'),
     path('finance/boost-plans/', AdminBoostPlanListCreateView.as_view(), name='admin-finance-boost-plans-list-create'),

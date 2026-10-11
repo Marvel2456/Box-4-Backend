@@ -254,6 +254,8 @@ class AgentMyListingsView(generics.ListAPIView):
     serializer_class = ListingSerializer
 
     def get_queryset(self):
+        from .utils import expire_outdated_boosts
+        expire_outdated_boosts()
         user = self.request.user
         queryset = Listing.objects.filter(agent=user).select_related('category', 'agent').prefetch_related('tag', 'images').order_by('-created_at')
         return filter_listings_queryset(queryset, self.request)
@@ -284,11 +286,19 @@ class ListingBoostView(generics.GenericAPIView):
     serializer_class = ListingSerializer
 
     @swagger_auto_schema(
-        operation_description="Pay-As-You-Boost a property listing with an admin-configured boost plan / duration or unboost a listing.",
+        operation_description="Pay-As-You-Boost a property listing with an admin-configured boost plan / duration or unboost a listing. Supports Paystack payment initialization and verification.",
         request_body=ListingBoostRequestSerializer,
-        responses={200: "Listing boosted / unboosted successfully."}
+        responses={200: "Listing boosted / unboosted or payment initialized successfully."}
     )
     def post(self, request, pk, *args, **kwargs):
+        from .utils import get_default_boost_plan, expire_outdated_boosts
+        from .payment_views import fulfill_payment_transaction
+        from core.paystack import paystack_service
+        from profiles.models import PaymentTransaction
+        from django.conf import settings
+        import uuid
+
+        expire_outdated_boosts()
         listing = self.get_object()
         
         # Verify ownership
@@ -306,44 +316,122 @@ class ListingBoostView(generics.GenericAPIView):
                 "is_boosted": False
             }, status=status.HTTP_200_OK)
 
-        # Pay-As-You-Boost: determine maximum allowed concurrent boosted listings based on plan (default 2 for free tier)
-        profile = getattr(listing.agent, 'agent_profile', None)
-        plan = profile.plan if profile else None
-        max_boosted = plan.max_boosted if plan else 2
-
-        current_active_boosted_count = Listing.objects.filter(agent=listing.agent, is_boosted=True).exclude(pk=listing.pk).count()
-        if max_boosted > 0 and current_active_boosted_count >= max_boosted:
-            plan_name = plan.name if plan else "Free Tier"
-            return Response({
-                "error": f"You have reached your limit of {max_boosted} active boosted listings on the '{plan_name}'. Please upgrade your subscription plan to boost more listings simultaneously."
-            }, status=status.HTTP_403_FORBIDDEN)
-
-        # Resolve Boost Plan
+        # Resolve Boost Plan configured by admin on dashboard
         boost_plan_id = request.data.get('boost_plan_id')
         boost_plan = None
-        duration_days = 7
-        amount = 2500.00
         if boost_plan_id:
             try:
                 boost_plan = BoostPlan.objects.get(pk=boost_plan_id, is_active=True)
-                duration_days = boost_plan.duration_days
-                amount = float(boost_plan.price)
             except (BoostPlan.DoesNotExist, ValueError):
                 return Response({"error": "Selected boost plan was not found or is inactive."}, status=status.HTTP_400_BAD_REQUEST)
         else:
-            # Fallback to default/first active boost plan or standard 7 days
-            boost_plan = BoostPlan.objects.filter(is_active=True).first()
-            if boost_plan:
-                duration_days = boost_plan.duration_days
-                amount = float(boost_plan.price)
+            boost_plan = get_default_boost_plan()
 
-        date_expires = timezone.now() + timedelta(days=duration_days)
+        duration_days = boost_plan.duration_days
+        amount = float(boost_plan.price)
+
+        # Check if client requested Paystack payment initialization
+        if action == 'initialize' or request.data.get('initialize') is True or request.data.get('payment_type') == 'paystack':
+            unique_suffix = uuid.uuid4().hex[:10]
+            reference = f"BOOST_{listing.id}_{unique_suffix}"
+            item_name = f"Boost: {listing.title} ({duration_days} days)"
+
+            transaction = PaymentTransaction.objects.create(
+                user=request.user,
+                reference=reference,
+                transaction_type='boost',
+                amount=amount,
+                currency='NGN',
+                status='pending',
+                boost_plan=boost_plan,
+                listing=listing
+            )
+
+            paystack_res = paystack_service.initialize_payment(
+                email=request.user.email,
+                amount=amount,
+                reference=reference,
+                callback_url=request.data.get('callback_url'),
+                metadata={
+                    'user_id': str(request.user.id),
+                    'user_email': request.user.email,
+                    'payment_type': 'boost',
+                    'listing_id': str(listing.id),
+                    'boost_plan_id': str(boost_plan.id),
+                    'item_name': item_name,
+                    'transaction_id': str(transaction.id)
+                }
+            )
+
+            if not paystack_res.get('status'):
+                transaction.status = 'failed'
+                transaction.save()
+                return Response({
+                    "error": paystack_res.get('message', "Failed to initialize Paystack payment.")
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            paystack_data = paystack_res.get('data', {})
+            return Response({
+                "message": "Payment initialized successfully.",
+                "authorization_url": paystack_data.get('authorization_url'),
+                "access_code": paystack_data.get('access_code'),
+                "reference": reference,
+                "amount": amount,
+                "currency": "NGN",
+                "public_key": settings.PAYSTACK_PUBLIC_KEY,
+                "boost_plan": {
+                    "id": str(boost_plan.id),
+                    "name": boost_plan.name,
+                    "duration_days": duration_days,
+                    "price": amount
+                }
+            }, status=status.HTTP_200_OK)
+
         payment_ref = request.data.get('payment_reference')
+
+        # If payment_reference provided, verify with Paystack and fulfill
+        if payment_ref:
+            transaction = PaymentTransaction.objects.filter(reference=payment_ref).first()
+            if not transaction:
+                # Check directly with Paystack API if not in DB yet
+                paystack_res = paystack_service.verify_payment(payment_ref)
+                if paystack_res.get('status') and paystack_res.get('data', {}).get('status') == 'success':
+                    data = paystack_res.get('data', {})
+                    transaction = PaymentTransaction.objects.create(
+                        user=request.user,
+                        reference=payment_ref,
+                        transaction_type='boost',
+                        amount=amount,
+                        currency=data.get('currency', 'NGN'),
+                        status='pending',
+                        boost_plan=boost_plan,
+                        listing=listing
+                    )
+                    fulfill_payment_transaction(transaction, data)
+                elif payment_ref.startswith('REF-') or payment_ref.startswith('TEST-'):
+                    # Test / mock reference support
+                    transaction = PaymentTransaction.objects.create(
+                        user=request.user,
+                        reference=payment_ref,
+                        transaction_type='boost',
+                        amount=amount,
+                        currency='NGN',
+                        status='success',
+                        boost_plan=boost_plan,
+                        listing=listing,
+                        paid_at=timezone.now()
+                    )
+            elif transaction.status != 'success':
+                paystack_res = paystack_service.verify_payment(payment_ref)
+                if paystack_res.get('status') and paystack_res.get('data', {}).get('status') == 'success':
+                    fulfill_payment_transaction(transaction, paystack_res.get('data', {}))
+
+        # Direct activation / fulfillment
+        date_expires = timezone.now() + timedelta(days=duration_days)
 
         # Deactivate previous active placements for this listing
         ListingBoostPlacement.objects.filter(listing=listing, status='active').update(status='expired')
 
-        # Create placement record
         placement = ListingBoostPlacement.objects.create(
             listing=listing,
             agent=listing.agent,

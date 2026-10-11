@@ -1,4 +1,5 @@
 from rest_framework import generics, status, permissions
+from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
@@ -1362,6 +1363,14 @@ class AdminBoostPlanListCreateView(generics.ListCreateAPIView):
     serializer_class = BoostPlanManagementSerializer
     pagination_class = None
 
+    def get_queryset(self):
+        from agents.utils import get_default_boost_plan
+        qs = super().get_queryset()
+        if not qs.exists():
+            get_default_boost_plan()
+            qs = super().get_queryset()
+        return qs
+
     @swagger_auto_schema(
         operation_description="List all boost plans/durations or create a new boost plan.",
         responses={200: BoostPlanManagementSerializer(many=True), 201: BoostPlanManagementSerializer()}
@@ -1374,6 +1383,67 @@ class AdminBoostPlanDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAdminOnlyRole]
     queryset = BoostPlan.objects.all()
     serializer_class = BoostPlanManagementSerializer
+
+
+class AdminBoostFeeSettingView(APIView):
+    """
+    Get or update the active property boost fee and duration set by admin on the admin dashboard.
+    """
+    permission_classes = [IsAdminOnlyRole]
+
+    @swagger_auto_schema(
+        operation_description="Get the current active property boost fee and duration set by admin on dashboard.",
+        responses={200: BoostPlanManagementSerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        from agents.utils import get_default_boost_plan
+        boost_plan = get_default_boost_plan()
+        serializer = BoostPlanManagementSerializer(boost_plan)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_description="Update the active property boost fee (one-time fee) on admin dashboard.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'price': openapi.Schema(type=openapi.TYPE_NUMBER, description="One-time boost fee in NGN (e.g., 2500.00)"),
+                'duration_days': openapi.Schema(type=openapi.TYPE_INTEGER, description="Duration in days (e.g., 7)"),
+                'name': openapi.Schema(type=openapi.TYPE_STRING, description="Boost package name"),
+                'description': openapi.Schema(type=openapi.TYPE_STRING, description="Boost package description"),
+            }
+        ),
+        responses={200: BoostPlanManagementSerializer()}
+    )
+    def post(self, request, *args, **kwargs):
+        return self.patch(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        from agents.utils import get_default_boost_plan
+        boost_plan = get_default_boost_plan()
+
+        price = request.data.get('price') or request.data.get('amount')
+        if price is not None:
+            boost_plan.price = price
+
+        duration_days = request.data.get('duration_days')
+        if duration_days is not None:
+            boost_plan.duration_days = duration_days
+
+        name = request.data.get('name')
+        if name:
+            boost_plan.name = name
+
+        description = request.data.get('description')
+        if description:
+            boost_plan.description = description
+
+        boost_plan.save()
+
+        serializer = BoostPlanManagementSerializer(boost_plan)
+        return Response({
+            "message": "Boost fee updated successfully.",
+            "data": serializer.data
+        }, status=status.HTTP_200_OK)
 
 
 class AdminBoostPlacementsListView(generics.ListAPIView):

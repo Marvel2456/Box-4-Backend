@@ -1,5 +1,10 @@
+import json
+import hmac
+import hashlib
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from unittest.mock import patch
@@ -298,25 +303,24 @@ class ListingAPITests(APITestCase):
         boost_url1 = reverse('listing-boost', kwargs={'pk': listing1.id})
         boost_url2 = reverse('listing-boost', kwargs={'pk': listing2.id})
 
-        # Boost 1st listing (Silver limit is 1)
+        # Boost 1st listing
         response1 = self.client.post(boost_url1)
         self.assertEqual(response1.status_code, status.HTTP_200_OK)
         self.assertTrue(response1.data['is_boosted'])
 
-        # Attempt to boost 2nd listing (should fail due to 1 limit)
+        # Boosting 2nd listing succeeds (one-time fee, not restricted by subscription limits)
         response2 = self.client.post(boost_url2)
-        self.assertEqual(response2.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn("limit of 1", response2.data['error'])
+        self.assertEqual(response2.status_code, status.HTTP_200_OK)
+        self.assertTrue(response2.data['is_boosted'])
 
         # Unboost 1st listing
         unboost_response = self.client.post(boost_url1, {"action": "unboost"})
         self.assertEqual(unboost_response.status_code, status.HTTP_200_OK)
         self.assertFalse(unboost_response.data['is_boosted'])
 
-        # Boost 2nd listing (should succeed now)
-        success_response = self.client.post(boost_url2)
-        self.assertEqual(success_response.status_code, status.HTTP_200_OK)
-        self.assertTrue(success_response.data['is_boosted'])
+        # Listing 2 remains boosted
+        listing2.refresh_from_db()
+        self.assertTrue(listing2.is_boosted)
 
     def test_feature_listing_limit(self):
         # Create two listings
@@ -1065,7 +1069,11 @@ class PaystackPaymentAPITests(APITestCase):
             }
         }
 
-        res = self.client.post(self.webhook_url, webhook_payload, format='json')
+        raw_bytes = json.dumps(webhook_payload).encode('utf-8')
+        secret = (settings.PAYSTACK_SECRET_KEY or 'test_secret').encode('utf-8')
+        sig = hmac.new(secret, raw_bytes, hashlib.sha512).hexdigest()
+
+        res = self.client.post(self.webhook_url, raw_bytes, content_type='application/json', HTTP_X_PAYSTACK_SIGNATURE=sig)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
         tx.refresh_from_db()
@@ -1090,5 +1098,86 @@ class PaystackPaymentAPITests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         data = res.data['results'] if 'results' in res.data else res.data
         self.assertTrue(any(t['reference'] == "HIST_TX_001" for t in data))
+
+    @patch('core.paystack.PaystackService.initialize_payment')
+    def test_initialize_boost_via_listing_boost_endpoint(self, mock_paystack_init):
+        mock_paystack_init.return_value = {
+            'status': True,
+            'message': 'Authorization URL created',
+            'data': {
+                'authorization_url': 'https://checkout.paystack.com/mock-boost-url',
+                'access_code': 'mock_access_boost_999',
+                'reference': 'BOOST_ENDPOINT_REF'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        boost_url = reverse('listing-boost', kwargs={'pk': self.listing.id})
+        res = self.client.post(boost_url, {
+            "action": "initialize",
+            "boost_plan_id": str(self.boost_plan.id)
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['reference'].startswith(f"BOOST_{self.listing.id}_"))
+        self.assertEqual(res.data['authorization_url'], "https://checkout.paystack.com/mock-boost-url")
+        self.assertEqual(res.data['access_code'], "mock_access_boost_999")
+        self.assertEqual(res.data['amount'], 5000.00)
+        self.assertEqual(res.data['public_key'], settings.PAYSTACK_PUBLIC_KEY)
+
+    @patch('core.paystack.PaystackService.verify_payment')
+    def test_verify_boost_via_listing_boost_endpoint(self, mock_paystack_verify):
+        ref = "BOOST_ENDPOINT_VERIFY_REF"
+        mock_paystack_verify.return_value = {
+            'status': True,
+            'data': {
+                'status': 'success',
+                'reference': ref,
+                'amount': 500000,
+                'channel': 'card',
+                'currency': 'NGN',
+                'gateway_response': 'Successful'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        boost_url = reverse('listing-boost', kwargs={'pk': self.listing.id})
+        res = self.client.post(boost_url, {
+            "payment_reference": ref,
+            "boost_plan_id": str(self.boost_plan.id)
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.data['is_boosted'])
+        self.listing.refresh_from_db()
+        self.assertTrue(self.listing.is_boosted)
+
+    def test_boost_expiration_marks_listing_unboosted(self):
+        from agents.utils import expire_outdated_boosts
+        from datetime import timedelta
+        from django.utils import timezone
+
+        # Set listing as boosted with expired placement
+        self.listing.is_boosted = True
+        self.listing.save()
+
+        ListingBoostPlacement.objects.create(
+            listing=self.listing,
+            agent=self.agent,
+            boost_plan=self.boost_plan,
+            amount=5000.00,
+            duration_days=7,
+            date_expires=timezone.now() - timedelta(days=1),
+            status='active'
+        )
+
+        expired_count = expire_outdated_boosts()
+        self.assertEqual(expired_count, 1)
+
+        self.listing.refresh_from_db()
+        self.assertFalse(self.listing.is_boosted)
+
 
 
