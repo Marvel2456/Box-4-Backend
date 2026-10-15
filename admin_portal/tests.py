@@ -631,7 +631,67 @@ class AdminPortalAPITests(APITestCase):
         results = agent_res.data['results'] if isinstance(agent_res.data, dict) and 'results' in agent_res.data else agent_res.data
         self.assertTrue(any(t['name'] == 'Ultra Luxury' for t in results))
 
+    def test_admin_legal_policy_get_and_update(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        admin_token = str(RefreshToken.for_user(self.admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {admin_token}')
 
+        policy_url = reverse('admin-legal-policy')
 
+        # 1. Admin gets current policy
+        get_res = self.client.get(policy_url)
+        self.assertEqual(get_res.status_code, status.HTTP_200_OK)
+        self.assertIn('legal', get_res.data)
+        self.assertIn('legal_terms', get_res.data)
+        self.assertIn('data_policy', get_res.data)
 
+        # 2. Admin updates legal terms and data policy via POST
+        update_data = {
+            "legal": "These are the official legal terms and conditions for Box-4.",
+            "data_policy": "This is our official data privacy and user data protection policy."
+        }
+        post_res = self.client.post(policy_url, update_data, format='json')
+        self.assertEqual(post_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(post_res.data['legal'], update_data['legal'])
+        self.assertEqual(post_res.data['data_policy'], update_data['data_policy'])
+        self.assertEqual(post_res.data['updated_by_email'], self.admin_user.email)
 
+        # 3. Partial update via PATCH (only update data_policy)
+        patch_res = self.client.patch(policy_url, {
+            "data_policy": "Updated data policy with enhanced GDPR compliance."
+        }, format='json')
+        self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_res.data['data_policy'], "Updated data policy with enhanced GDPR compliance.")
+        # Legal terms remain intact
+        self.assertEqual(patch_res.data['legal'], update_data['legal'])
+
+        # 4. Non-admin user cannot access admin legal-policy endpoint
+        buyer_user = User.objects.create_user(
+            email="policy_buyer@example.com",
+            username="policy_buyer@example.com",
+            password="securepassword123",
+            full_name="Policy Buyer",
+            role="buyer",
+            is_email_verified=True
+        )
+        buyer_token = str(RefreshToken.for_user(buyer_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {buyer_token}')
+        forbidden_res = self.client.get(policy_url)
+        self.assertEqual(forbidden_res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_public_legal_policy_endpoints(self):
+        # Client without credentials
+        self.client.credentials()
+
+        # 1. Fetch via /api/v1/legal-policy/
+        public_url = reverse('public-legal-policy')
+        res = self.client.get(public_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn('legal', res.data)
+        self.assertIn('data_policy', res.data)
+
+        # 2. Fetch via /api/v1/policy/
+        alias_url = reverse('public-policy')
+        alias_res = self.client.get(alias_url)
+        self.assertEqual(alias_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(alias_res.data['legal'], res.data['legal'])

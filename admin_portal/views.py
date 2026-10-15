@@ -43,7 +43,8 @@ from .serializers import (
     FeaturesResponseSerializer,
     RevenueOverviewResponseSerializer,
     AdminSubscriptionDetailSerializer,
-    AdminFeatureDetailSerializer
+    AdminFeatureDetailSerializer,
+    PlatformPolicySerializer
 )
 from agents.models import Listing, Report, Category, Tag
 from agents.serializers import CategorySerializer, TagSerializer
@@ -1803,6 +1804,75 @@ class AdminAgentKYCReviewView(generics.GenericAPIView):
             return Response({"error": "Invalid action. Must be 'approve' or 'reject'."}, status=status.HTTP_400_BAD_REQUEST)
 
 
+class AdminLegalPolicySettingView(APIView):
+    """
+    Get or update the platform legal terms and data policy on the admin dashboard.
+    """
+    permission_classes = [IsAdminOnlyRole]
+
+    @swagger_auto_schema(
+        operation_description="Get the current platform legal terms and data policy set on admin dashboard.",
+        responses={200: PlatformPolicySerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        from .models import PlatformPolicy
+        policy = PlatformPolicy.get_active_policy()
+        serializer = PlatformPolicySerializer(policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_description="Update platform legal terms and data policy from the admin dashboard.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'legal': openapi.Schema(type=openapi.TYPE_STRING, description="Legal terms, terms of use, and conditions"),
+                'legal_terms': openapi.Schema(type=openapi.TYPE_STRING, description="Alias for legal terms"),
+                'data_policy': openapi.Schema(type=openapi.TYPE_STRING, description="Data policy, privacy policy, and user data terms"),
+                'privacy_policy': openapi.Schema(type=openapi.TYPE_STRING, description="Alias for data policy"),
+            }
+        ),
+        responses={200: PlatformPolicySerializer()}
+    )
+    def post(self, request, *args, **kwargs):
+        return self.patch(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        return self.patch(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        from .models import PlatformPolicy
+        policy = PlatformPolicy.get_active_policy()
+
+        legal_val = request.data.get('legal') or request.data.get('legal_terms') or request.data.get('terms')
+        if legal_val is not None:
+            policy.legal_terms = str(legal_val).strip()
+
+        data_policy_val = request.data.get('data_policy') or request.data.get('privacy_policy') or request.data.get('policy')
+        if data_policy_val is not None:
+            policy.data_policy = str(data_policy_val).strip()
+
+        policy.updated_by = request.user
+        policy.save()
+
+        serializer = PlatformPolicySerializer(policy)
+        return Response({
+            "message": "Platform legal terms and data policy updated successfully.",
+            **serializer.data
+        }, status=status.HTTP_200_OK)
 
 
+class PublicLegalPolicyView(APIView):
+    """
+    Public endpoint for mobile apps, agents, and buyers to fetch the active legal terms and data policy.
+    """
+    permission_classes = [permissions.AllowAny]
 
+    @swagger_auto_schema(
+        operation_description="Public endpoint to read active platform legal terms and data policy.",
+        responses={200: PlatformPolicySerializer()}
+    )
+    def get(self, request, *args, **kwargs):
+        from .models import PlatformPolicy
+        policy = PlatformPolicy.get_active_policy()
+        serializer = PlatformPolicySerializer(policy)
+        return Response(serializer.data, status=status.HTTP_200_OK)

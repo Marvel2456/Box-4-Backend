@@ -24,6 +24,7 @@ from drf_yasg import openapi
 from django.views.generic import RedirectView
 
 from core.views import DirectMediaUploadView
+from admin_portal.views import PublicLegalPolicyView
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -50,6 +51,12 @@ urlpatterns = [
         path('chat/', include('chat.urls')),
         path('notifications/', include('notifications.urls')),
         path('admin-portal/', include('admin_portal.urls')),
+
+        # Public Platform Legal & Data Policy
+        path('legal-policy/', PublicLegalPolicyView.as_view(), name='public-legal-policy'),
+        path('policy/', PublicLegalPolicyView.as_view(), name='public-policy'),
+        path('legal/', PublicLegalPolicyView.as_view(), name='public-legal'),
+        path('data-policy/', PublicLegalPolicyView.as_view(), name='public-data-policy'),
     
         # Swagger & ReDoc Documentation
         path('', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),

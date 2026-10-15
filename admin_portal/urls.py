@@ -46,6 +46,8 @@ from .views import (
     AdminTagDetailView,
     AdminAgentKYCListView,
     AdminAgentKYCReviewView,
+    AdminLegalPolicySettingView,
+    PublicLegalPolicyView,
 )
 
 urlpatterns = [
@@ -124,4 +126,11 @@ urlpatterns = [
     path('finance/features/<uuid:pk>/send-reminder/', AdminSendFeatureReminderView.as_view(), name='admin-finance-feature-send-reminder'),
     path('finance/featured-plans/', AdminFeaturedPlanCreateView.as_view(), name='admin-finance-featured-plans-create'),
     path('finance/featured-plans/<uuid:pk>/', AdminFeaturedPlanDetailView.as_view(), name='admin-finance-featured-plans-detail'),
+
+    # Legal & Data Policy Management
+    path('legal-policy/', AdminLegalPolicySettingView.as_view(), name='admin-legal-policy'),
+    path('policy/', AdminLegalPolicySettingView.as_view(), name='admin-policy'),
+    path('legal/', AdminLegalPolicySettingView.as_view(), name='admin-legal'),
+    path('data-policy/', AdminLegalPolicySettingView.as_view(), name='admin-data-policy'),
 ]
+

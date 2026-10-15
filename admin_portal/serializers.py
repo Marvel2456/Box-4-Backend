@@ -762,8 +762,32 @@ class AdminFeatureDetailSerializer(serializers.Serializer):
             "amount": f"N{obj.amount:,.0f}"
         }
 
+class PlatformPolicySerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    legal = serializers.CharField(source='legal_terms', required=False, allow_blank=True)
+    legal_terms = serializers.CharField(required=False, allow_blank=True)
+    data_policy = serializers.CharField(required=False, allow_blank=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+    updated_by_email = serializers.SerializerMethodField()
+    updated_by_name = serializers.SerializerMethodField()
 
+    def get_updated_by_email(self, obj):
+        return obj.updated_by.email if obj.updated_by else None
 
+    def get_updated_by_name(self, obj):
+        return obj.updated_by.full_name if obj.updated_by else None
 
+    def to_internal_value(self, data):
+        ret = super().to_internal_value(data)
+        # Support aliases: legal, terms, legal_terms
+        legal_val = data.get('legal') or data.get('legal_terms') or data.get('terms')
+        if legal_val is not None:
+            ret['legal_terms'] = str(legal_val)
 
+        # Support aliases: data_policy, privacy_policy, privacy
+        policy_val = data.get('data_policy') or data.get('privacy_policy') or data.get('policy')
+        if policy_val is not None:
+            ret['data_policy'] = str(policy_val)
 
+        return ret
