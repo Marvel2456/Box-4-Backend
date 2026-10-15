@@ -438,3 +438,89 @@ class BuyerAPITests(APITestCase):
         self.assertEqual(res3.data['views_count'], 1)
         self.listing_b.refresh_from_db()
         self.assertEqual(self.listing_b.views_count, 1)
+
+    def test_unauthenticated_buyer_can_view_listings_and_details(self):
+        # Ensure client has no credentials
+        self.client.credentials()
+
+        # 1. View listing catalog
+        res_list = self.client.get(self.search_url)
+        self.assertEqual(res_list.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(res_list.data['results']), 1)
+
+        # 2. View specific listing details
+        detail_url = reverse('buyer-properties-detail', kwargs={'pk': self.listing_a.id})
+        res_detail = self.client.get(detail_url)
+        self.assertEqual(res_detail.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_detail.data['title'], "Lekki Duplex")
+        self.assertFalse(res_detail.data['is_saved'])
+
+        # 3. View top listings
+        res_top = self.client.get(self.top_url)
+        self.assertEqual(res_top.status_code, status.HTTP_200_OK)
+
+        # 4. View dashboard as guest
+        res_dash = self.client.get(reverse('buyer-dashboard'))
+        self.assertEqual(res_dash.status_code, status.HTTP_200_OK)
+        self.assertIn('nearest_properties', res_dash.data)
+        self.assertIsNone(res_dash.data['user_location']['full_name'])
+
+        # 5. Record anonymous listing view
+        view_url = reverse('buyer-property-view')
+        initial_views = self.listing_a.views_count
+        res_view = self.client.post(view_url, {"listing_id": str(self.listing_a.id)})
+        self.assertEqual(res_view.status_code, status.HTTP_201_CREATED)
+        self.listing_a.refresh_from_db()
+        self.assertEqual(self.listing_a.views_count, initial_views + 1)
+
+    def test_unauthenticated_buyer_cannot_contact_or_book_or_save(self):
+        self.client.credentials()
+
+        # 1. Cannot contact agent via property endpoint
+        contact_url = reverse('buyer-properties-contact', kwargs={'pk': self.listing_a.id})
+        res_contact = self.client.post(contact_url, {"message": "Can I see this house?"})
+        self.assertEqual(res_contact.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # 2. Cannot book inspection via property endpoint
+        book_url = reverse('buyer-properties-book', kwargs={'pk': self.listing_a.id})
+        res_book = self.client.post(book_url, {
+            "date": "2026-10-25",
+            "time": "14:00",
+            "notes": "Please let me know if this works."
+        })
+        self.assertEqual(res_book.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # 3. Cannot contact agent via chat contact-agent endpoint
+        res_chat_contact = self.client.post(reverse('contact-agent'), {
+            "listing_id": str(self.listing_a.id)
+        })
+        self.assertEqual(res_chat_contact.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        # 4. Cannot save listing
+        res_save = self.client.post(self.saved_url, {"listing_id": str(self.listing_a.id)})
+        self.assertEqual(res_save.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_authenticated_buyer_can_contact_and_book(self):
+        token = self.get_jwt_token("buyer@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # 1. Contact agent on property
+        contact_url = reverse('buyer-properties-contact', kwargs={'pk': self.listing_a.id})
+        res_contact = self.client.post(contact_url, {"message": "Hi, is this duplex still available?"})
+        self.assertEqual(res_contact.status_code, status.HTTP_201_CREATED)
+        self.assertIn('chatroom_id', res_contact.data)
+        self.assertIn('chat_message', res_contact.data)
+        self.assertEqual(res_contact.data['chat_message']['message'], "Hi, is this duplex still available?")
+
+        # 2. Book inspection on property
+        book_url = reverse('buyer-properties-book', kwargs={'pk': self.listing_a.id})
+        res_book = self.client.post(book_url, {
+            "date": "2026-10-30",
+            "time": "15:30",
+            "notes": "Coming with my spouse."
+        })
+        self.assertEqual(res_book.status_code, status.HTTP_201_CREATED)
+        self.assertIn('booking_details', res_book.data)
+        self.assertEqual(res_book.data['booking_details']['preferred_date'], "2026-10-30")
+        self.assertEqual(res_book.data['booking_details']['preferred_time'], "15:30")
+        self.assertIn("Coming with my spouse.", res_book.data['chat_message']['message'])

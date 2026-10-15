@@ -36,6 +36,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         data['email'] = self.user.email
         data['full_name'] = self.user.full_name
         data['is_email_verified'] = self.user.is_email_verified
+        if self.user.role == 'agent':
+            profile = getattr(self.user, 'agent_profile', None)
+            kyc_status = profile.kyc_status if profile else 'unverified'
+            data['kyc_status'] = kyc_status
         return data
 
 

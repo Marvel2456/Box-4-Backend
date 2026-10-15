@@ -107,10 +107,13 @@ class AgentProfileOnboardingSerializer(serializers.ModelSerializer):
     longitude = CoordinateField(required=True)
     phone_number = serializers.CharField(required=True)
     profile_picture = FlexibleImageField(required=False, allow_null=True)
+    kyc_status = serializers.CharField(read_only=True)
+    is_verified = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = AgentProfile
-        fields = ('phone_number', 'profile_picture', 'latitude', 'longitude', 'city', 'state', 'country', 'bio', 'agency_name', 'license_number')
+        fields = ('phone_number', 'profile_picture', 'latitude', 'longitude', 'city', 'state', 'country', 'bio', 'agency_name', 'license_number', 'kyc_status', 'is_verified')
+        read_only_fields = ('kyc_status', 'is_verified')
 
 
 class AdminProfileOnboardingSerializer(serializers.ModelSerializer):

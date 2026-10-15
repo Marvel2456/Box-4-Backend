@@ -75,14 +75,21 @@ class AgentListSerializer(serializers.ModelSerializer):
     total_listings_count = serializers.SerializerMethodField()
     distance_km = serializers.SerializerMethodField()
     date_joined = serializers.DateTimeField(read_only=True)
+    kyc_status = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             'id', 'email', 'full_name', 'role', 'phone_number', 'profile_picture',
             'agency_name', 'is_verified', 'city', 'state', 'country',
-            'rating', 'bio', 'date_joined', 'total_listings_count', 'distance_km'
+            'rating', 'bio', 'date_joined', 'total_listings_count', 'distance_km',
+            'kyc_status'
         )
+
+    def get_kyc_status(self, obj):
+        if hasattr(obj, 'agent_profile'):
+            return obj.agent_profile.kyc_status
+        return 'unverified'
 
     def get_profile_picture(self, obj):
         request = self.context.get('request')

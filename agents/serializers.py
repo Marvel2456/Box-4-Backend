@@ -193,7 +193,7 @@ class ListingSerializer(serializers.ModelSerializer):
             # Enforce KYC verification
             if not hasattr(profile, 'kyc') or profile.kyc.status != 'verified':
                 raise serializers.ValidationError(
-                    "Your account KYC is not verified. Please complete your NIN and CAC identity verification to list properties."
+                    "Your account KYC is not verified. Please complete your NIN identity verification to list properties."
                 )
         return attrs
 
@@ -357,9 +357,6 @@ class AgentDashboardResponseSerializer(serializers.Serializer):
 
 class AgentKYCSubmitSerializer(serializers.Serializer):
     nin_number = serializers.CharField(max_length=11, min_length=11, help_text="11-digit National Identity Number (NIN).")
-    cac_number = serializers.CharField(max_length=50, required=False, allow_blank=True, allow_null=True, help_text="Optional CAC registration number (e.g. RC1234567 or BN7654321).")
-    cac_company_type = serializers.ChoiceField(choices=[('co', 'Company (RC)'), ('bn', 'Business Name (BN)'), ('it', 'Incorporated Trustees')], default='co', required=False)
-    agency_name = serializers.CharField(max_length=150, required=False, allow_blank=True, allow_null=True)
 
     def validate_nin_number(self, value):
         val = str(value).strip()

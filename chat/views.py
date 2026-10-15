@@ -847,6 +847,153 @@ class ChatViewSet(viewsets.GenericViewSet):
         return Response({"unread_count": count}, status=status.HTTP_200_OK)
 
 
+def perform_contact_agent(sender, receiver, listing_obj=None, custom_message=None):
+    if receiver == sender:
+        return Response({"error": "You cannot initiate a chat conversation with yourself."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Enforce Apple Guideline 1.2 User Blocking Rules
+    if BlockedUser.objects.filter(blocker=receiver, blocked=sender).exists():
+        return Response(
+            {"error": "You have been blocked by this agent and cannot contact them."}, 
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    if BlockedUser.objects.filter(blocker=sender, blocked=receiver).exists():
+        return Response(
+            {"error": "You have blocked this agent. Unblock them to send inquiries."}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Build initial message
+    if custom_message and custom_message.strip():
+        intro_msg = custom_message
+    elif listing_obj:
+        intro_msg = f"Hi {receiver.full_name}, I am interested in your property listing: '{listing_obj.title}' located at {listing_obj.address}."
+    else:
+        intro_msg = f"Hi {receiver.full_name}, I would like to connect with you regarding your property listings."
+
+    # Get or create ChatRoom
+    room = ChatRoom.get_or_create_room(sender, receiver, listing_obj)
+
+    # Save to database
+    message = Message.objects.create(
+        chatroom=room,
+        sender=sender,
+        receiver=receiver,
+        listing=listing_obj,
+        message=intro_msg
+    )
+
+    # Create In-App Notification
+    from notifications.models import Notification
+    Notification.objects.create(
+        recipient=receiver,
+        sender=sender,
+        notification_type='inquiry',
+        title='Property Inquiry',
+        message=intro_msg,
+        listing=listing_obj
+    )
+
+    # Calculate receiver unread count
+    receiver_unread_total = Message.objects.filter(
+        receiver=receiver, 
+        is_read=False,
+        chatroom__isnull=False
+    ).exclude(
+        sender__is_deleted=True
+    ).exclude(
+        sender__is_active=False
+    ).count()
+
+    # Trigger Pusher
+    pusher_client = get_configured_pusher_client()
+    if pusher_client:
+        raw_data = MessageSerializer(message).data
+        message_payload = json.loads(json.dumps(raw_data, cls=DjangoJSONEncoder))
+        try:
+            # 1. Chatroom channel
+            pusher_client.trigger(
+                room.channel_name,
+                'new_message',
+                message_payload
+            )
+            # 2. Receiver personal private channel
+            pusher_client.trigger(
+                f'private-user-{receiver.id}',
+                'new_message',
+                message_payload
+            )
+            pusher_client.trigger(
+                f'private-user-{receiver.id}',
+                'unread_count_update',
+                {
+                    'unread_messages_count': receiver_unread_total,
+                    'chatroom_id': str(room.id)
+                }
+            )
+            pusher_client.trigger(
+                f'private-user-{receiver.id}',
+                'new_notification',
+                {
+                    'type': 'inquiry',
+                    'title': 'Property Inquiry',
+                    'message': intro_msg,
+                    'chatroom_id': str(room.id),
+                    'channel_name': room.channel_name
+                }
+            )
+            # Backwards compatibility triggers
+            pusher_client.trigger(
+                f'private-chat_{receiver.id}',
+                'new_message',
+                message_payload
+            )
+            pusher_client.trigger(
+                f'user_{receiver.id}',
+                'unread_count_update',
+                {
+                    'unread_messages_count': receiver_unread_total,
+                    'chatroom_id': str(room.id)
+                }
+            )
+            pusher_client.trigger(
+                f'user_{receiver.id}',
+                'new_notification',
+                {
+                    'type': 'inquiry',
+                    'title': 'Property Inquiry',
+                    'message': intro_msg,
+                    'chatroom_id': str(room.id),
+                    'channel_name': room.channel_name
+                }
+            )
+        except Exception as e:
+            logger.error("Failed to broadcast Pusher new_message in contact_agent: %s", str(e), exc_info=True)
+
+    # Dispatch FCM Push Notification
+    send_push_notification(
+        user=receiver,
+        title=f"Property Inquiry from {sender.full_name}",
+        body=intro_msg[:120],
+        data={
+            "type": "inquiry",
+            "chatroom_id": str(room.id),
+            "channel_name": room.channel_name,
+            "sender_id": str(sender.id),
+            "listing_id": str(listing_obj.id) if listing_obj else ""
+        }
+    )
+
+    return Response({
+        "message": "Chat conversation initiated successfully.",
+        "chatroom_id": str(room.id),
+        "channel_name": room.channel_name,
+        "event": "new_message",
+        "chat_message": MessageSerializer(message).data
+    }, status=status.HTTP_201_CREATED)
+
+
 class ContactAgentView(generics.GenericAPIView):
     serializer_class = InitiateChatSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -882,147 +1029,9 @@ class ContactAgentView(generics.GenericAPIView):
         if not receiver:
             return Response({"error": "Receiver not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if receiver == request.user:
-            return Response({"error": "You cannot initiate a chat conversation with yourself."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Enforce Apple Guideline 1.2 User Blocking Rules
-        if BlockedUser.objects.filter(blocker=receiver, blocked=request.user).exists():
-            return Response(
-                {"error": "You have been blocked by this agent and cannot contact them."}, 
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        if BlockedUser.objects.filter(blocker=request.user, blocked=receiver).exists():
-            return Response(
-                {"error": "You have blocked this agent. Unblock them to send inquiries."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Build initial message
-        if custom_message and custom_message.strip():
-            intro_msg = custom_message
-        elif listing_obj:
-            intro_msg = f"Hi {receiver.full_name}, I am interested in your property listing: '{listing_obj.title}' located at {listing_obj.address}."
-        else:
-            intro_msg = f"Hi {receiver.full_name}, I would like to connect with you regarding your property listings."
-
-        # Get or create ChatRoom
-        room = ChatRoom.get_or_create_room(request.user, receiver, listing_obj)
-
-        # Save to database
-        message = Message.objects.create(
-            chatroom=room,
+        return perform_contact_agent(
             sender=request.user,
             receiver=receiver,
-            listing=listing_obj,
-            message=intro_msg
+            listing_obj=listing_obj,
+            custom_message=custom_message
         )
-
-        # Create In-App Notification
-        from notifications.models import Notification
-        Notification.objects.create(
-            recipient=receiver,
-            sender=request.user,
-            notification_type='inquiry',
-            title='Property Inquiry',
-            message=intro_msg,
-            listing=listing_obj
-        )
-
-        # Calculate receiver unread count
-        receiver_unread_total = Message.objects.filter(
-            receiver=receiver, 
-            is_read=False,
-            chatroom__isnull=False
-        ).exclude(
-            sender__is_deleted=True
-        ).exclude(
-            sender__is_active=False
-        ).count()
-
-        # Trigger Pusher
-        pusher_client = self.get_pusher_client()
-        if pusher_client:
-            raw_data = MessageSerializer(message).data
-            message_payload = json.loads(json.dumps(raw_data, cls=DjangoJSONEncoder))
-            try:
-                # 1. Chatroom channel
-                pusher_client.trigger(
-                    room.channel_name,
-                    'new_message',
-                    message_payload
-                )
-                # 2. Receiver personal private channel
-                pusher_client.trigger(
-                    f'private-user-{receiver.id}',
-                    'new_message',
-                    message_payload
-                )
-                pusher_client.trigger(
-                    f'private-user-{receiver.id}',
-                    'unread_count_update',
-                    {
-                        'unread_messages_count': receiver_unread_total,
-                        'chatroom_id': str(room.id)
-                    }
-                )
-                pusher_client.trigger(
-                    f'private-user-{receiver.id}',
-                    'new_notification',
-                    {
-                        'type': 'inquiry',
-                        'title': 'Property Inquiry',
-                        'message': intro_msg,
-                        'chatroom_id': str(room.id),
-                        'channel_name': room.channel_name
-                    }
-                )
-                # Backwards compatibility triggers
-                pusher_client.trigger(
-                    f'private-chat_{receiver.id}',
-                    'new_message',
-                    message_payload
-                )
-                pusher_client.trigger(
-                    f'user_{receiver.id}',
-                    'unread_count_update',
-                    {
-                        'unread_messages_count': receiver_unread_total,
-                        'chatroom_id': str(room.id)
-                    }
-                )
-                pusher_client.trigger(
-                    f'user_{receiver.id}',
-                    'new_notification',
-                    {
-                        'type': 'inquiry',
-                        'title': 'Property Inquiry',
-                        'message': intro_msg,
-                        'chatroom_id': str(room.id),
-                        'channel_name': room.channel_name
-                    }
-                )
-            except Exception as e:
-                logger.error("Failed to broadcast Pusher new_message in contact_agent: %s", str(e), exc_info=True)
-
-        # Dispatch FCM Push Notification
-        send_push_notification(
-            user=receiver,
-            title=f"Property Inquiry from {request.user.full_name}",
-            body=intro_msg[:120],
-            data={
-                "type": "inquiry",
-                "chatroom_id": str(room.id),
-                "channel_name": room.channel_name,
-                "sender_id": str(request.user.id),
-                "listing_id": str(listing_obj.id) if listing_obj else ""
-            }
-        )
-
-        return Response({
-            "message": "Chat conversation initiated successfully.",
-            "chatroom_id": str(room.id),
-            "channel_name": room.channel_name,
-            "event": "new_message",
-            "chat_message": MessageSerializer(message).data
-        }, status=status.HTTP_201_CREATED)

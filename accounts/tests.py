@@ -141,6 +141,8 @@ class AuthenticationTests(APITestCase):
         self.assertIn("refresh", response.data)
         self.assertEqual(response.data['role'], "agent")
         self.assertTrue(response.data['is_email_verified'])
+        self.assertIn("kyc_status", response.data)
+        self.assertEqual(response.data['kyc_status'], "unverified")
 
     @patch('accounts.views.verify_google_token')
     def test_google_auth_new_user(self, mock_verify):

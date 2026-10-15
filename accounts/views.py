@@ -92,19 +92,24 @@ class OTPVerifyView(generics.GenericAPIView):
         # Generate login tokens
         refresh = RefreshToken.for_user(user)
         
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_email_verified": user.is_email_verified
+        }
+        if user.role == 'agent':
+            profile = getattr(user, 'agent_profile', None)
+            user_data['kyc_status'] = profile.kyc_status if profile else 'unverified'
+
         return Response({
             "message": "Email verified successfully.",
             "tokens": {
                 "refresh": str(refresh),
                 "access": str(refresh.access_token)
             },
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "full_name": user.full_name,
-                "role": user.role,
-                "is_email_verified": user.is_email_verified
-            }
+            "user": user_data
         }, status=status.HTTP_200_OK)
 
 
@@ -192,6 +197,17 @@ class GoogleAuthView(generics.GenericAPIView):
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
         
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_email_verified": user.is_email_verified
+        }
+        if user.role == 'agent':
+            profile = getattr(user, 'agent_profile', None)
+            user_data['kyc_status'] = profile.kyc_status if profile else 'unverified'
+
         return Response({
             "message": "Google Authentication Successful.",
             "is_new_user": created,
@@ -199,13 +215,7 @@ class GoogleAuthView(generics.GenericAPIView):
                 "refresh": str(refresh),
                 "access": str(refresh.access_token)
             },
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "full_name": user.full_name,
-                "role": user.role,
-                "is_email_verified": user.is_email_verified
-            }
+            "user": user_data
         }, status=status.HTTP_200_OK)
 
 

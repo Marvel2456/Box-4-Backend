@@ -187,9 +187,13 @@ class AgentDashboardView(generics.GenericAPIView):
         profile_picture = None
         plan_name = "Free"
         days_left = 30
+        kyc_status = "unverified"
+        is_verified = False
         try:
             if hasattr(user, 'agent_profile') and user.agent_profile:
                 profile = user.agent_profile
+                kyc_status = profile.kyc_status
+                is_verified = profile.is_verified
                 if profile.profile_picture:
                     profile_picture = request.build_absolute_uri(profile.profile_picture.url)
                 if profile.plan:
@@ -242,7 +246,9 @@ class AgentDashboardView(generics.GenericAPIView):
                 "id": str(user.id),
                 "full_name": user.full_name,
                 "email": user.email,
-                "profile_picture": profile_picture
+                "profile_picture": profile_picture,
+                "kyc_status": kyc_status,
+                "is_verified": is_verified
             },
             "metrics": metrics,
             "active_listings": active_listings_data
@@ -699,7 +705,7 @@ class AgentKYCVerifyView(generics.GenericAPIView):
     serializer_class = AgentKYCSubmitSerializer
 
     @swagger_auto_schema(
-        operation_description="Submit NIN and optional CAC registration details for automated Prembly identity verification.",
+        operation_description="Submit 11-digit NIN for automated identity verification.",
         responses={
             200: openapi.Response(description="KYC Verified Successfully", schema=AgentKYCSerializer()),
             400: "Verification Failed"
@@ -714,9 +720,9 @@ class AgentKYCVerifyView(generics.GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         nin_number = serializer.validated_data['nin_number']
-        cac_number = serializer.validated_data.get('cac_number')
-        cac_company_type = serializer.validated_data.get('cac_company_type', 'co')
-        agency_name = serializer.validated_data.get('agency_name')
+        cac_number = request.data.get('cac_number')
+        cac_company_type = request.data.get('cac_company_type', 'co')
+        agency_name = request.data.get('agency_name')
 
         profile, _ = AgentProfile.objects.get_or_create(user=user)
         kyc, _ = AgentKYC.objects.get_or_create(agent_profile=profile)
@@ -725,7 +731,7 @@ class AgentKYCVerifyView(generics.GenericAPIView):
         kyc.submitted_at = timezone.now()
         kyc.attempts_count += 1
 
-        # 1. Verify NIN
+        # Verify NIN via Prembly
         first_name = user.full_name.split()[0] if user.full_name else None
         last_name = user.full_name.split()[-1] if user.full_name and len(user.full_name.split()) > 1 else None
         nin_result = prembly.verify_nin(nin_number, first_name=first_name, last_name=last_name)
@@ -749,33 +755,14 @@ class AgentKYCVerifyView(generics.GenericAPIView):
         kyc.nin_verified = True
         kyc.nin_data = nin_result.get('data') or {}
 
-        # 2. Verify CAC if provided
+        # Save optional metadata if provided
         if cac_number:
-            cac_result = prembly.verify_cac(cac_number, company_type=cac_company_type, company_name=agency_name or profile.agency_name)
-            if not cac_result.get('verified'):
-                failure_msg = f"CAC Verification Failed: {cac_result.get('message')}"
-                kyc.status = 'failed'
-                kyc.cac_verified = False
-                kyc.cac_number = cac_number
-                kyc.cac_company_type = cac_company_type
-                kyc.cac_data = cac_result.get('data') or {}
-                kyc.failure_reason = failure_msg
-                kyc.save()
-                profile.is_verified = False
-                profile.save()
-                return Response({
-                    "error": failure_msg,
-                    "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
-                }, status=status.HTTP_400_BAD_REQUEST)
-
             kyc.cac_number = cac_number
             kyc.cac_company_type = cac_company_type
-            kyc.cac_verified = True
-            kyc.cac_data = cac_result.get('data') or {}
-            if agency_name:
-                profile.agency_name = agency_name
+        if agency_name:
+            profile.agency_name = agency_name
 
-        # All verifications succeeded
+        # NIN verified successfully -> KYC marked as verified
         kyc.status = 'verified'
         kyc.failure_reason = None
         kyc.verified_at = timezone.now()
@@ -785,7 +772,7 @@ class AgentKYCVerifyView(generics.GenericAPIView):
         profile.save()
 
         return Response({
-            "message": "KYC identity verification completed successfully!",
+            "message": "NIN identity verification completed successfully!",
             "kyc": AgentKYCSerializer(kyc, context={'request': request}).data
         }, status=status.HTTP_200_OK)
 

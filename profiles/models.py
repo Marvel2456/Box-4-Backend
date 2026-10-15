@@ -101,9 +101,10 @@ class AgentProfile(models.Model):
 
     @property
     def kyc_status(self):
-        if hasattr(self, 'kyc'):
+        try:
             return self.kyc.status
-        return 'unverified'
+        except Exception:
+            return 'unverified'
 
 
 class AgentKYC(models.Model):

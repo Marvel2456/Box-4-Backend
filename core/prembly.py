@@ -15,7 +15,11 @@ class PremblyService:
     def __init__(self, secret_key=None, app_id=None, public_key=None, environment=None):
         self.secret_key = secret_key or getattr(settings, 'PREMBLY_SECRET_KEY', None) or os.getenv('PREMBLY_SECRET_KEY')
         self.public_key = public_key or getattr(settings, 'PREMBLY_PUBLIC_KEY', None) or os.getenv('PREMBLY_PUBLIC_KEY')
-        self.app_id = app_id or getattr(settings, 'PREMBLY_APP_ID', None) or os.getenv('PREMBLY_APP_ID') or self.public_key
+        raw_app_id = app_id or getattr(settings, 'PREMBLY_APP_ID', None) or os.getenv('PREMBLY_APP_ID')
+        if raw_app_id and str(raw_app_id).strip() not in ["", "PREMBLY_APP_ID", "your_prembly_app_id_here"]:
+            self.app_id = str(raw_app_id).strip()
+        else:
+            self.app_id = self.public_key
         self.environment = (environment or getattr(settings, 'PREMBLY_ENVIRONMENT', 'sandbox') or os.getenv('PREMBLY_ENVIRONMENT', 'sandbox')).lower()
         self.base_url = self.BASE_URL
 

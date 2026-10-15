@@ -477,9 +477,8 @@ class ListingAPITests(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("KYC is not verified", str(res.data))
 
-    @patch('core.prembly.PremblyService.verify_cac')
     @patch('core.prembly.PremblyService.verify_nin')
-    def test_agent_kyc_verification_flow_and_status(self, mock_nin, mock_cac):
+    def test_agent_kyc_verification_flow_and_status(self, mock_nin):
         mock_nin.return_value = {
             "status": True,
             "verified": True,
@@ -490,16 +489,7 @@ class ListingAPITests(APITestCase):
                 "nin": "12345678901"
             }
         }
-        mock_cac.return_value = {
-            "status": True,
-            "verified": True,
-            "message": "CAC verified successfully",
-            "data": {
-                "rc_number": "RC1234567",
-                "company_name": "Verified Properties Ltd"
-            }
-        }
-        # 1. Unverified agent submits valid NIN and CAC
+        # 1. Unverified agent submits valid NIN
         agent = User.objects.create_user(
             email="kycagent@example.com",
             username="kycagent@example.com",
@@ -525,22 +515,37 @@ class ListingAPITests(APITestCase):
         bad_res = self.client.post(verify_url, {"nin_number": "12345"})
         self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
 
-        # Submit verification with valid 11-digit NIN and CAC
+        # Submit verification with valid 11-digit NIN only
         good_res = self.client.post(verify_url, {
-            "nin_number": "12345678901",
-            "cac_number": "RC1234567",
-            "cac_company_type": "co",
-            "agency_name": "Verified Properties Ltd"
+            "nin_number": "12345678901"
         })
         self.assertEqual(good_res.status_code, status.HTTP_200_OK)
         self.assertEqual(good_res.data['kyc']['status'], 'verified')
         self.assertTrue(good_res.data['kyc']['nin_verified'])
-        self.assertTrue(good_res.data['kyc']['cac_verified'])
 
         # Now check agent status endpoint returns verified
         status_res = self.client.get(status_url)
         self.assertEqual(status_res.status_code, status.HTTP_200_OK)
         self.assertEqual(status_res.data['status'], 'verified')
+
+        # Check login response displays kyc_status='verified'
+        login_res = self.client.post(reverse('auth_login'), {
+            "email": self.agent_user.email,
+            "password": "securepassword123"
+        })
+        self.assertEqual(login_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(login_res.data.get('kyc_status'), 'verified')
+
+        # Check agent profile displays kyc_status='verified'
+        profile_res = self.client.get(reverse('my_profile'))
+        self.assertEqual(profile_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(profile_res.data.get('kyc_status'), 'verified')
+        self.assertTrue(profile_res.data.get('is_verified'))
+
+        # Check agent dashboard displays kyc_status='verified'
+        dash_res = self.client.get(reverse('agent-dashboard'))
+        self.assertEqual(dash_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(dash_res.data['agent'].get('kyc_status'), 'verified')
 
     def test_admin_agent_kyc_management(self):
         # Create admin user

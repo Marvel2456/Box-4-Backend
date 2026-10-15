@@ -51,7 +51,12 @@ def haversine_distance(lat1, lon1, lat2, lon2):
 
 class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ListingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
+
+    def get_permissions(self):
+        if self.action in ['contact', 'book']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.AllowAny()]
 
     def get_queryset(self):
         from agents.utils import expire_outdated_boosts
@@ -212,6 +217,83 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     def record_view(self, request, *args, **kwargs):
         view = ListingViewCreateView.as_view()
         return view(request._request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_description="Contact the agent for this listing. Requires buyer authentication.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'message': openapi.Schema(type=openapi.TYPE_STRING, description="Optional inquiry message")
+            }
+        ),
+        responses={
+            201: "Chat conversation initiated successfully.",
+            401: "Authentication credentials were not provided."
+        }
+    )
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def contact(self, request, pk=None):
+        listing = self.get_object()
+        from chat.views import perform_contact_agent
+        custom_message = request.data.get('message')
+        return perform_contact_agent(
+            sender=request.user,
+            receiver=listing.agent,
+            listing_obj=listing,
+            custom_message=custom_message
+        )
+
+    @swagger_auto_schema(
+        operation_description="Book a property inspection with the agent. Requires buyer authentication.",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'date': openapi.Schema(type=openapi.TYPE_STRING, description="Preferred inspection date (e.g. '2026-10-25')"),
+                'time': openapi.Schema(type=openapi.TYPE_STRING, description="Preferred inspection time (e.g. '14:00')"),
+                'notes': openapi.Schema(type=openapi.TYPE_STRING, description="Additional notes or preferences"),
+                'message': openapi.Schema(type=openapi.TYPE_STRING, description="Optional custom booking message"),
+            }
+        ),
+        responses={
+            201: "Inspection booking request sent successfully.",
+            401: "Authentication credentials were not provided."
+        }
+    )
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def book(self, request, pk=None):
+        listing = self.get_object()
+        from chat.views import perform_contact_agent
+        booking_date = request.data.get('date') or request.data.get('booking_date')
+        booking_time = request.data.get('time') or request.data.get('booking_time')
+        notes = request.data.get('notes') or request.data.get('message')
+
+        booking_parts = [f"Hi {listing.agent.full_name}, I would like to book an inspection for '{listing.title}' located at {listing.address}."]
+        if booking_date:
+            booking_parts.append(f"Preferred Date: {booking_date}")
+        if booking_time:
+            booking_parts.append(f"Preferred Time: {booking_time}")
+        if notes and notes != booking_date and notes != booking_time:
+            booking_parts.append(f"Notes: {notes}")
+
+        booking_message = "\n".join(booking_parts)
+
+        res = perform_contact_agent(
+            sender=request.user,
+            receiver=listing.agent,
+            listing_obj=listing,
+            custom_message=booking_message
+        )
+        if res.status_code == status.HTTP_201_CREATED:
+            res.data['message'] = "Inspection booking request sent successfully."
+            res.data['booking_details'] = {
+                "listing_id": str(listing.id),
+                "listing_title": listing.title,
+                "agent_name": listing.agent.full_name,
+                "preferred_date": booking_date,
+                "preferred_time": booking_time,
+                "notes": notes
+            }
+        return res
 
 
 class AgentSearchView(generics.ListAPIView):
@@ -444,12 +526,13 @@ class ListingViewCreateView(generics.GenericAPIView):
     """
     Record a buyer viewing a property listing.
     Prevents duplicate views from the same buyer on the same listing.
+    Supports anonymous visitors viewing listings.
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
     serializer_class = ListingViewCreateSerializer
 
     @swagger_auto_schema(
-        operation_description="Record a unique property view for the authenticated buyer.",
+        operation_description="Record a property view for an authenticated or anonymous buyer.",
         request_body=ListingViewCreateSerializer,
         responses={
             201: "Listing view recorded successfully.",
@@ -460,14 +543,30 @@ class ListingViewCreateView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         listing = serializer.validated_data['listing_id']
-        buyer = request.user
 
-        view_instance, created = ListingView.objects.get_or_create(
-            buyer=buyer,
-            listing=listing
-        )
+        if request.user and request.user.is_authenticated:
+            view_instance, created = ListingView.objects.get_or_create(
+                buyer=request.user,
+                listing=listing
+            )
+            if created:
+                Listing.objects.filter(id=listing.id).update(views_count=F('views_count') + 1)
+                listing.refresh_from_db(fields=['views_count'])
+                return Response({
+                    "message": "Listing view recorded successfully.",
+                    "created": True,
+                    "listing_id": str(listing.id),
+                    "views_count": listing.views_count
+                }, status=status.HTTP_201_CREATED)
 
-        if created:
+            return Response({
+                "message": "Listing already viewed by this buyer.",
+                "created": False,
+                "listing_id": str(listing.id),
+                "views_count": listing.views_count
+            }, status=status.HTTP_200_OK)
+        else:
+            # Anonymous visitor view
             Listing.objects.filter(id=listing.id).update(views_count=F('views_count') + 1)
             listing.refresh_from_db(fields=['views_count'])
             return Response({
@@ -477,22 +576,15 @@ class ListingViewCreateView(generics.GenericAPIView):
                 "views_count": listing.views_count
             }, status=status.HTTP_201_CREATED)
 
-        return Response({
-            "message": "Listing already viewed by this buyer.",
-            "created": False,
-            "listing_id": str(listing.id),
-            "views_count": listing.views_count
-        }, status=status.HTTP_200_OK)
-
 
 class BuyerDashboardView(generics.GenericAPIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
     serializer_class = BuyerDashboardSerializer
 
     @swagger_auto_schema(responses={200: BuyerDashboardSerializer()})
     def get(self, request, *args, **kwargs):
-        user = request.user
-        profile = getattr(user, 'buyer_profile', None)
+        user = request.user if request.user and request.user.is_authenticated else None
+        profile = getattr(user, 'buyer_profile', None) if user else None
 
         profile_pic_url = None
         if profile and profile.profile_picture:
@@ -523,8 +615,8 @@ class BuyerDashboardView(generics.GenericAPIView):
                 pass
 
         user_location_data = {
-            "full_name": user.full_name,
-            "email": user.email,
+            "full_name": user.full_name if user else None,
+            "email": user.email if user else None,
             "profile_picture": profile_pic_url,
             "latitude": buyer_lat,
             "longitude": buyer_lng,
