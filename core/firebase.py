@@ -34,12 +34,42 @@ def get_firebase_app():
                 except Exception as e:
                     logger.warning(f"[Firebase Init Warning] Failed to load credentials from {cred_path}: {e}")
 
+            # Auto-discovery in project's firebase/ directory
+            if not cred:
+                firebase_dir = os.path.join(settings.BASE_DIR, 'firebase')
+                if os.path.exists(firebase_dir):
+                    has_client_file_only = False
+                    for fname in sorted(os.listdir(firebase_dir)):
+                        if fname.endswith('.json'):
+                            fpath = os.path.join(firebase_dir, fname)
+                            try:
+                                with open(fpath, 'r', encoding='utf-8') as f:
+                                    content = json.load(f)
+                                if isinstance(content, dict):
+                                    if content.get('type') == 'service_account':
+                                        cred = credentials.Certificate(content)
+                                        logger.info(f"[Firebase] Auto-discovered service account credentials at {fpath}")
+                                        break
+                                    elif 'project_info' in content and 'client' in content:
+                                        has_client_file_only = True
+                            except Exception as e:
+                                logger.debug(f"[Firebase] Skipping {fname}: {e}")
+
+                    if not cred and has_client_file_only:
+                        logger.warning(
+                            "[Firebase Config Notice] Found 'google-services.json' in firebase/ directory. "
+                            "Note: 'google-services.json' is the client-side configuration for the mobile app (Android/Flutter). "
+                            "To enable backend push notifications, please download the Service Account private key JSON from "
+                            "Firebase Console -> Project Settings -> Service accounts -> 'Generate new private key' and place it in the firebase/ folder."
+                        )
+
             if cred:
                 firebase_admin.initialize_app(cred)
                 _firebase_initialized = True
                 logger.info("[Firebase] Successfully initialized Firebase Admin SDK.")
             else:
                 _firebase_initialized = False
+                return None
         else:
             _firebase_initialized = True
         return firebase_admin.get_app()
@@ -47,6 +77,17 @@ def get_firebase_app():
         logger.warning(f"[Firebase Warning] firebase-admin is not configured or failed to initialize: {e}")
         _firebase_initialized = False
         return None
+
+
+def is_firebase_configured():
+    """
+    Checks if Firebase Admin SDK is initialized and available for sending push notifications.
+    """
+    try:
+        app = get_firebase_app()
+        return app is not None
+    except Exception:
+        return False
 
 
 def send_push_notification(user, title, body, data=None):
@@ -82,10 +123,33 @@ def send_push_notification(user, title, body, data=None):
             body=body,
         )
 
+        # High priority Android notification config (enables sound and heads-up banner)
+        android_config = messaging.AndroidConfig(
+            priority='high',
+            notification=messaging.AndroidNotification(
+                sound='default',
+                channel_id='box4_notifications',
+                click_action='FLUTTER_NOTIFICATION_CLICK',
+            )
+        )
+
+        # APNS config for iOS devices (enables badge, sound, and background delivery)
+        apns_config = messaging.APNSConfig(
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    sound='default',
+                    badge=1,
+                    content_available=True,
+                )
+            )
+        )
+
         message = messaging.MulticastMessage(
             tokens=device_tokens,
             notification=notification,
             data=safe_data,
+            android=android_config,
+            apns=apns_config,
         )
 
         response = messaging.send_each_for_multicast(message)

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "558305504435",
+    "project_id": "box4mobile-cd7cd",
+    "storage_bucket": "box4mobile-cd7cd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:558305504435:android:dd41d1f15762153d1c14c6",
+        "android_client_info": {
+          "package_name": "com.box4realestate.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBnVytUjjOYSn-23RbafIkh8eR3vip5F5U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

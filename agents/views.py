@@ -802,6 +802,7 @@ class AgentListingViewsDetailView(generics.GenericAPIView):
     """
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ListingViewMetricsSerializer
+    queryset = Listing.objects.none()
 
     @swagger_auto_schema(
         operation_description="Get unique buyer view counts (total, today, this week, this month) for a specific listing.",

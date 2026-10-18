@@ -2,7 +2,7 @@ import requests
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.utils import timezone
-from rest_framework import status, views, generics, permissions
+from rest_framework import status, views, generics, permissions, serializers
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -22,7 +22,8 @@ from .serializers import (
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
     DeleteAccountSerializer,
-    ChangePasswordSerializer
+    ChangePasswordSerializer,
+    LogoutSerializer
 )
 
 User = get_user_model()
@@ -46,9 +47,38 @@ def verify_google_token(token):
     return None
 
 
+class LoginResponseSerializer(serializers.Serializer):
+    refresh = serializers.CharField(help_text="JWT refresh token")
+    access = serializers.CharField(help_text="JWT access token")
+    role = serializers.CharField(help_text="User role: 'buyer', 'agent', or 'admin'")
+    id = serializers.IntegerField(help_text="User database ID")
+    email = serializers.EmailField(help_text="User email address")
+    full_name = serializers.CharField(help_text="User full name")
+    is_email_verified = serializers.BooleanField(help_text="Whether email address is verified")
+    kyc_status = serializers.CharField(
+        required=False,
+        help_text="Agent KYC verification status: 'verified', 'pending', or 'unverified' (included if role is agent)"
+    )
+
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
     permission_classes = [AllowAny]
+
+    @swagger_auto_schema(
+        operation_summary="User Login (JWT Authentication + Optional FCM Token)",
+        operation_description=(
+            "Authenticates user credentials and returns JWT access & refresh tokens along with user profile information.\n\n"
+            "### Push Notifications (FCM Integration):\n"
+            "The frontend can optionally pass `fcm_token` and `device_platform` ('android', 'ios', 'web') "
+            "directly in the login request body. The backend will authenticate the user and bind the device token in a single call.\n\n"
+            "Alternatively, the frontend can register device tokens after login via `POST /api/v1/notifications/devices/`."
+        ),
+        request_body=CustomTokenObtainPairSerializer,
+        responses={200: LoginResponseSerializer}
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
 
 class UserRegisterView(generics.CreateAPIView):
@@ -139,6 +169,18 @@ class GoogleAuthView(generics.GenericAPIView):
     serializer_class = GoogleAuthSerializer
     permission_classes = [AllowAny]
 
+    @swagger_auto_schema(
+        operation_summary="Google OAuth Sign-In (JWT + Optional FCM Token)",
+        operation_description=(
+            "Authenticates a user via Google OAuth ID Token.\n\n"
+            "- **token**: Google ID token obtained from Google Sign-In on the client.\n"
+            "- **role**: 'buyer' or 'agent' (default: 'buyer', used when creating a new account).\n"
+            "- **fcm_token**: (Optional) Device FCM token to register push notifications immediately.\n"
+            "- **device_platform**: (Optional) 'android', 'ios', or 'web' (default: 'android')."
+        ),
+        request_body=GoogleAuthSerializer,
+        responses={200: openapi.Response(description="Google Authentication Successful")}
+    )
     def post(self, request, *args, **kwargs):
         serializer = GoogleAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -208,6 +250,19 @@ class GoogleAuthView(generics.GenericAPIView):
             profile = getattr(user, 'agent_profile', None)
             user_data['kyc_status'] = profile.kyc_status if profile else 'unverified'
 
+        fcm_token = serializer.validated_data.get('fcm_token')
+        device_platform = serializer.validated_data.get('device_platform', 'android')
+        if fcm_token:
+            from notifications.models import DeviceToken
+            DeviceToken.objects.update_or_create(
+                token=fcm_token.strip(),
+                defaults={
+                    'user': user,
+                    'platform': device_platform,
+                    'is_active': True,
+                }
+            )
+
         return Response({
             "message": "Google Authentication Successful.",
             "is_new_user": created,
@@ -217,6 +272,41 @@ class GoogleAuthView(generics.GenericAPIView):
             },
             "user": user_data
         }, status=status.HTTP_200_OK)
+
+
+class LogoutView(generics.GenericAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = LogoutSerializer
+
+    @swagger_auto_schema(
+        operation_summary="User Logout (Deactivate FCM Token)",
+        operation_description=(
+            "Logs out the user and deactivates push notifications on this device.\n\n"
+            "- **fcm_token**: (Optional) The FCM device token to deactivate so notifications stop for this phone.\n"
+            "- **refresh**: (Optional) JWT refresh token to blacklist."
+        ),
+        request_body=LogoutSerializer,
+        responses={200: openapi.Response(description="Logged out successfully")}
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fcm_token = serializer.validated_data.get('fcm_token')
+        refresh = serializer.validated_data.get('refresh')
+
+        if fcm_token:
+            from notifications.models import DeviceToken
+            DeviceToken.objects.filter(token=fcm_token.strip(), user=request.user).update(is_active=False)
+
+        if refresh:
+            try:
+                from rest_framework_simplejwt.tokens import RefreshToken
+                token = RefreshToken(refresh)
+                token.blacklist()
+            except Exception:
+                pass
+
+        return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
 
 
 class ForgotPasswordView(generics.GenericAPIView):

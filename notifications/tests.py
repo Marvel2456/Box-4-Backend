@@ -166,3 +166,46 @@ class NotificationAPITests(APITestCase):
         list_res = self.client.get(self.list_url)
         self.assertEqual(list_res.data['count'], 0)
 
+    def test_test_push_notification_endpoint(self):
+        token = self.get_jwt_token("notifagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        test_push_url = reverse('notification-test-push')
+
+        # Call test push endpoint with custom payload and token
+        res = self.client.post(test_push_url, {
+            "token": "test_fcm_token_device_abc123",
+            "title": "Welcome to Box-4",
+            "body": "Testing FCM push notifications.",
+            "data": {"custom_key": "custom_val"}
+        }, format='json')
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("firebase_configured", res.data)
+        self.assertIn("registered_tokens_count", res.data)
+        self.assertGreaterEqual(res.data["registered_tokens_count"], 1)
+        self.assertIn("message", res.data)
+
+    def test_firebase_core_auto_discovery_and_safe_fallback(self):
+        from core.firebase import get_firebase_app, send_push_notification, is_firebase_configured
+        from notifications.models import DeviceToken
+
+        # Verify discovery doesn't crash on google-services.json client file
+        is_ready = is_firebase_configured()
+        self.assertIsInstance(is_ready, bool)
+
+        # Create device token
+        DeviceToken.objects.update_or_create(
+            token="sample_mock_token_111",
+            defaults={'user': self.agent_user, 'platform': 'android', 'is_active': True}
+        )
+
+        # Test sending notification
+        sent = send_push_notification(
+            user=self.agent_user,
+            title="Unit Test Title",
+            body="Unit Test Body",
+            data={"test": "123"}
+        )
+        self.assertIsInstance(sent, int)
+
+

@@ -7,6 +7,21 @@ from .models import EmailOTP
 User = get_user_model()
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    fcm_token = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        write_only=True,
+        help_text="Optional FCM device token for push notifications"
+    )
+    device_platform = serializers.ChoiceField(
+        choices=[('android', 'Android'), ('ios', 'iOS'), ('web', 'Web')],
+        default='android',
+        required=False,
+        write_only=True,
+        help_text="Device platform (android, ios, or web)"
+    )
+
     @classmethod
     def get_token(cls, user):
         token = super().get_token(user)
@@ -15,6 +30,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
+        fcm_token = attrs.pop('fcm_token', None)
+        device_platform = attrs.pop('device_platform', 'android')
+
         username_field = self.username_field
         if username_field in attrs and isinstance(attrs[username_field], str):
             attrs[username_field] = attrs[username_field].strip().lower()
@@ -30,6 +48,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             
         if getattr(self.user, 'is_suspended', False):
             raise serializers.ValidationError("This account has been suspended. Please contact support.")
+
+        if fcm_token:
+            from notifications.models import DeviceToken
+            DeviceToken.objects.update_or_create(
+                token=fcm_token.strip(),
+                defaults={
+                    'user': self.user,
+                    'platform': device_platform,
+                    'is_active': True,
+                }
+            )
 
         data['role'] = self.user.role
         data['id'] = self.user.id
@@ -138,6 +167,18 @@ class OTPResendSerializer(serializers.Serializer):
 class GoogleAuthSerializer(serializers.Serializer):
     token = serializers.CharField(required=True)
     role = serializers.ChoiceField(choices=User.ROLE_CHOICES, default='buyer', required=False)
+    fcm_token = serializers.CharField(required=False, allow_null=True, allow_blank=True, help_text="Optional FCM device token for push notifications")
+    device_platform = serializers.ChoiceField(
+        choices=[('android', 'Android'), ('ios', 'iOS'), ('web', 'Web')],
+        default='android',
+        required=False,
+        help_text="Device platform (android, ios, or web)"
+    )
+
+
+class LogoutSerializer(serializers.Serializer):
+    refresh = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Optional refresh token to blacklist")
+    fcm_token = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Optional FCM device token to deactivate on logout")
 
 
 class ForgotPasswordSerializer(serializers.Serializer):

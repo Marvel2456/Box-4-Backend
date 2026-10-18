@@ -491,6 +491,7 @@ class SavedListingViewSet(viewsets.ModelViewSet):
         agent = listing.agent
         if agent != buyer:
             from notifications.models import Notification
+            from core.firebase import send_push_notification
             Notification.objects.create(
                 recipient=agent,
                 sender=buyer,
@@ -498,6 +499,15 @@ class SavedListingViewSet(viewsets.ModelViewSet):
                 title='Listing Saved',
                 message=f"{buyer.full_name} saved your property listing '{listing.title}'.",
                 listing=listing
+            )
+            send_push_notification(
+                user=agent,
+                title="Listing Saved",
+                body=f"{buyer.full_name} saved your property listing '{listing.title}'.",
+                data={
+                    "type": "saved_listing",
+                    "listing_id": str(listing.id)
+                }
             )
 
         listing_data = ListingSerializer(listing, context={'request': request}).data

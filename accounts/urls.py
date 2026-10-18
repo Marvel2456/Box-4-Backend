@@ -9,11 +9,13 @@ from .views import (
     ForgotPasswordView,
     ResetPasswordView,
     DeleteAccountView,
-    ChangePasswordView
+    ChangePasswordView,
+    LogoutView
 )
 
 urlpatterns = [
     path('login/', CustomTokenObtainPairView.as_view(), name='auth_login'),
+    path('logout/', LogoutView.as_view(), name='auth_logout'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('register/', UserRegisterView.as_view(), name='auth_register'),
     path('verify-otp/', OTPVerifyView.as_view(), name='otp_verify'),

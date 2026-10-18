@@ -1754,6 +1754,7 @@ class AdminAgentKYCListView(generics.ListAPIView):
 class AdminAgentKYCReviewView(generics.GenericAPIView):
     permission_classes = [IsAdminOrModeratorRole]
     serializer_class = AgentKYCSerializer
+    queryset = AgentKYC.objects.none()
 
     @swagger_auto_schema(
         operation_description="Admin manual review and approval/rejection of an agent KYC record.",

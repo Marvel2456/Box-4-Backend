@@ -67,3 +67,26 @@ class DeviceTokenSerializer(serializers.ModelSerializer):
 
 class DeviceTokenUnregisterSerializer(serializers.Serializer):
     token = serializers.CharField(required=True, help_text="FCM Device registration token to deactivate")
+
+
+class TestPushNotificationSerializer(serializers.Serializer):
+    token = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Optional FCM registration token. If omitted, sends to all active tokens of the authenticated user."
+    )
+    title = serializers.CharField(
+        required=False,
+        default="Box-4 Test Notification",
+        help_text="Notification title"
+    )
+    body = serializers.CharField(
+        required=False,
+        default="This is a test push notification from Box-4 real estate backend.",
+        help_text="Notification message body"
+    )
+    data = serializers.DictField(
+        required=False,
+        help_text="Optional custom data dictionary"
+    )
+

@@ -141,8 +141,61 @@ class AuthenticationTests(APITestCase):
         self.assertIn("refresh", response.data)
         self.assertEqual(response.data['role'], "agent")
         self.assertTrue(response.data['is_email_verified'])
-        self.assertIn("kyc_status", response.data)
         self.assertEqual(response.data['kyc_status'], "unverified")
+
+    def test_login_with_fcm_token_registers_device(self):
+        user = User.objects.create_user(
+            email="fcmuser@example.com",
+            username="fcmuser@example.com",
+            password="testpassword123",
+            full_name="FCM User",
+            role="buyer"
+        )
+        user.is_email_verified = True
+        user.save()
+
+        data = {
+            "email": "fcmuser@example.com",
+            "password": "testpassword123",
+            "fcm_token": "fcm_token_from_mobile_12345",
+            "device_platform": "android"
+        }
+        response = self.client.post(self.login_url, data)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        from notifications.models import DeviceToken
+        device = DeviceToken.objects.filter(token="fcm_token_from_mobile_12345").first()
+        self.assertIsNotNone(device)
+        self.assertEqual(device.user, user)
+        self.assertEqual(device.platform, "android")
+        self.assertTrue(device.is_active)
+
+    def test_logout_deactivates_fcm_token(self):
+        user = User.objects.create_user(
+            email="logoutuser@example.com",
+            username="logoutuser@example.com",
+            password="testpassword123",
+            full_name="Logout User",
+            role="buyer"
+        )
+        user.is_email_verified = True
+        user.save()
+
+        from notifications.models import DeviceToken
+        DeviceToken.objects.create(
+            user=user,
+            token="device_token_to_deactivate",
+            platform="ios",
+            is_active=True
+        )
+
+        self.client.force_authenticate(user=user)
+        logout_url = reverse('auth_logout')
+        response = self.client.post(logout_url, {"fcm_token": "device_token_to_deactivate"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        device = DeviceToken.objects.get(token="device_token_to_deactivate")
+        self.assertFalse(device.is_active)
 
     @patch('accounts.views.verify_google_token')
     def test_google_auth_new_user(self, mock_verify):

@@ -1,4 +1,4 @@
-from rest_framework import generics, status, permissions
+from rest_framework import generics, status, permissions, serializers
 from rest_framework.response import Response
 from django.utils import timezone
 from datetime import timedelta
@@ -224,6 +224,7 @@ class AgentCancelSubscriptionView(generics.GenericAPIView):
     Cancel an active subscription / disable auto-renewal.
     """
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = serializers.Serializer
 
     @swagger_auto_schema(
         operation_description="Cancel current active subscription or disable auto-renewal.",
