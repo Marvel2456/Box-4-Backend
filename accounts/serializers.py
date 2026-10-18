@@ -178,6 +178,7 @@ class GoogleAuthSerializer(serializers.Serializer):
 
 class LogoutSerializer(serializers.Serializer):
     refresh = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Optional refresh token to blacklist")
+    refresh_token = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Alias for refresh token to blacklist")
     fcm_token = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Optional FCM device token to deactivate on logout")
 
 

@@ -292,7 +292,7 @@ class LogoutView(generics.GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         fcm_token = serializer.validated_data.get('fcm_token')
-        refresh = serializer.validated_data.get('refresh')
+        refresh = serializer.validated_data.get('refresh') or serializer.validated_data.get('refresh_token')
 
         if fcm_token:
             from notifications.models import DeviceToken
@@ -303,8 +303,9 @@ class LogoutView(generics.GenericAPIView):
                 from rest_framework_simplejwt.tokens import RefreshToken
                 token = RefreshToken(refresh)
                 token.blacklist()
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Could not blacklist token on logout: %s", e)
 
         return Response({"message": "Logged out successfully."}, status=status.HTTP_200_OK)
 

@@ -197,6 +197,41 @@ class AuthenticationTests(APITestCase):
         device = DeviceToken.objects.get(token="device_token_to_deactivate")
         self.assertFalse(device.is_active)
 
+    def test_logout_blacklists_refresh_token(self):
+        user = User.objects.create_user(
+            email="blacklistuser@example.com",
+            username="blacklistuser@example.com",
+            password="testpassword123",
+            full_name="Blacklist User",
+            role="buyer"
+        )
+        user.is_email_verified = True
+        user.save()
+
+        # Login to obtain tokens
+        login_res = self.client.post(self.login_url, {
+            "email": "blacklistuser@example.com",
+            "password": "testpassword123"
+        })
+        self.assertEqual(login_res.status_code, status.HTTP_200_OK)
+        refresh_token = login_res.data['refresh']
+        access_token = login_res.data['access']
+
+        # Confirm refresh token works before logout
+        refresh_url = reverse('token_refresh')
+        pre_logout_res = self.client.post(refresh_url, {"refresh": refresh_token})
+        self.assertEqual(pre_logout_res.status_code, status.HTTP_200_OK)
+
+        # Logout with refresh token
+        logout_url = reverse('auth_logout')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access_token}')
+        logout_res = self.client.post(logout_url, {"refresh": refresh_token})
+        self.assertEqual(logout_res.status_code, status.HTTP_200_OK)
+
+        # Confirm refresh token is now rejected after logout
+        post_logout_res = self.client.post(refresh_url, {"refresh": refresh_token})
+        self.assertEqual(post_logout_res.status_code, status.HTTP_401_UNAUTHORIZED)
+
     @patch('accounts.views.verify_google_token')
     def test_google_auth_new_user(self, mock_verify):
         mock_verify.return_value = {

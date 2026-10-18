@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Firebase credentials (do NOT commit service account private keys)
+firebase/*adminsdk*.json
+firebase/*service-account*.json
+firebase/serviceAccountKey*.json
