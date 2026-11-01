@@ -44,6 +44,7 @@ services:
       - static_volume:/app/static:ro
       - media_volume:/app/media:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - web
     restart: always

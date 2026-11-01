@@ -40,7 +40,10 @@ if ! docker compose version &> /dev/null; then
     DOCKER_COMPOSE_CMD="docker-compose"
 fi
 
-# 4. Build and launch Docker services in detached mode
+# 4. Ensure Let's Encrypt webroot directory exists for Nginx mount
+mkdir -p /var/www/certbot 2>/dev/null || sudo mkdir -p /var/www/certbot
+
+# 5. Build and launch Docker services in detached mode
 echo -e "${GREEN}--> Building and starting Docker containers...${NC}"
 $DOCKER_COMPOSE_CMD -f docker-compose.prod.yml --env-file ${ENV_FILE} up -d --build --remove-orphans
 

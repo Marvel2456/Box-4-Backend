@@ -52,7 +52,8 @@ sudo ufw allow 443/tcp
 sudo ufw --force enable
 
 # Make scripts executable
-chmod +x deploy.sh entrypoint.sh 2>/dev/null || true
+sudo mkdir -p /var/www/certbot
+chmod +x deploy.sh entrypoint.sh renew_ssl.sh 2>/dev/null || true
 
 echo -e "${GREEN}==============================================================================${NC}"
 echo -e "${GREEN} VPS provisioning complete! ${NC}"
