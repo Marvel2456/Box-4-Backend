@@ -7,8 +7,7 @@ set -e
 python wait_for_db.py
 
 echo "Applying database migrations..."
-python manage.py makemigrations accounts profiles
-python manage.py migrate
+python manage.py migrate --no-input
 
 echo "Collecting static files..."
 python manage.py collectstatic --no-input
