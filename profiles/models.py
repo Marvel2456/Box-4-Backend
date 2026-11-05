@@ -201,7 +201,7 @@ class AgentSubscription(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     auto_renew = models.BooleanField(default=True)
     payment_method = models.CharField(max_length=50, default='card')
-    transaction_reference = models.CharField(max_length=100, blank=True, null=True)
+    transaction_reference = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -246,7 +246,7 @@ class ListingBoostPlacement(models.Model):
     date_started = models.DateTimeField(auto_now_add=True)
     date_expires = models.DateTimeField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
-    payment_reference = models.CharField(max_length=100, blank=True, null=True)
+    payment_reference = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -314,6 +314,7 @@ class PaymentTransaction(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='payment_transactions')
     reference = models.CharField(max_length=100, unique=True, db_index=True)
+    idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True, db_index=True)
     transaction_type = models.CharField(max_length=30, choices=TRANSACTION_TYPE_CHOICES)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     currency = models.CharField(max_length=10, default='NGN')

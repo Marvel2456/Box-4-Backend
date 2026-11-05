@@ -1,5 +1,7 @@
 from rest_framework import generics, status, permissions, serializers
 from rest_framework.response import Response
+from django.db import transaction as db_transaction
+from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import timedelta
 from drf_yasg.utils import swagger_auto_schema
@@ -7,6 +9,7 @@ from drf_yasg import openapi
 
 from profiles.models import Plan, BoostPlan, AgentProfile, AgentSubscription, ListingBoostPlacement
 from agents.models import Listing
+from .payment_views import extract_scoped_idempotency_key
 from .subscription_serializers import (
     AgentPlanSerializer,
     AgentBoostPlanSerializer,
@@ -14,6 +17,8 @@ from .subscription_serializers import (
     AgentSubscribeSerializer,
     AgentSubscriptionHistorySerializer,
 )
+
+User = get_user_model()
 
 
 class AgentPlanListView(generics.ListAPIView):
@@ -169,10 +174,14 @@ class AgentSubscribeView(generics.GenericAPIView):
         plan = serializer.validated_data['plan_id']
         payment_method = serializer.validated_data.get('payment_method', 'card')
         auto_renew = serializer.validated_data.get('auto_renew', True)
-        transaction_ref = serializer.validated_data.get('transaction_reference')
+        transaction_ref = (serializer.validated_data.get('transaction_reference') or '').strip() or None
+        scoped_idempotency_key = extract_scoped_idempotency_key(
+            request,
+            explicit_key=serializer.validated_data.get('idempotency_key')
+        )
+        effective_ref = transaction_ref or scoped_idempotency_key
 
         user = request.user
-        profile, _ = AgentProfile.objects.get_or_create(user=user)
 
         # Calculate renewal date based on billing cycle
         days_duration = 30
@@ -181,31 +190,64 @@ class AgentSubscribeView(generics.GenericAPIView):
         elif plan.billing_cycle == 'yearly':
             days_duration = 365
 
-        renewal_date = timezone.now() + timedelta(days=days_duration)
+        with db_transaction.atomic():
+            # Lock the user row and profile to prevent concurrent subscription race conditions
+            User.objects.select_for_update().filter(pk=user.pk).first()
+            profile, _ = AgentProfile.objects.get_or_create(user=user)
+            profile = AgentProfile.objects.select_for_update().get(pk=profile.pk)
 
-        # Deactivate previous active subscriptions
-        AgentSubscription.objects.filter(agent=user, status='active').update(status='cancelled')
+            # Idempotency check: if a subscription with this transaction_reference / idempotency_key already exists
+            if effective_ref:
+                existing_sub = (
+                    AgentSubscription.objects
+                    .select_for_update()
+                    .select_related('plan')
+                    .filter(agent=user, transaction_reference=effective_ref)
+                    .first()
+                )
+                if existing_sub:
+                    active_plan = existing_sub.plan or plan
+                    return Response({
+                        "message": f"Successfully subscribed to the '{active_plan.name}' plan!",
+                        "idempotent_replay": True,
+                        "subscription": {
+                            "id": str(existing_sub.id),
+                            "plan_name": active_plan.name,
+                            "price": float(active_plan.price),
+                            "billing_cycle": active_plan.billing_cycle,
+                            "date_started": existing_sub.date_started,
+                            "next_renewal": existing_sub.next_renewal,
+                            "status": existing_sub.status,
+                            "auto_renew": existing_sub.auto_renew
+                        }
+                    }, status=status.HTTP_200_OK)
 
-        # Create new active subscription
-        sub = AgentSubscription.objects.create(
-            agent=user,
-            plan=plan,
-            amount=plan.price,
-            next_renewal=renewal_date,
-            status='active',
-            auto_renew=auto_renew,
-            payment_method=payment_method,
-            transaction_reference=transaction_ref
-        )
+            renewal_date = timezone.now() + timedelta(days=days_duration)
 
-        # Update profile
-        profile.plan = plan
-        if plan.has_verified_badge:
-            profile.is_verified = True
-        profile.save()
+            # Deactivate previous active subscriptions under lock
+            AgentSubscription.objects.select_for_update().filter(agent=user, status='active').update(status='cancelled')
+
+            # Create new active subscription
+            sub = AgentSubscription.objects.create(
+                agent=user,
+                plan=plan,
+                amount=plan.price,
+                next_renewal=renewal_date,
+                status='active',
+                auto_renew=auto_renew,
+                payment_method=payment_method,
+                transaction_reference=effective_ref
+            )
+
+            # Update profile
+            profile.plan = plan
+            if plan.has_verified_badge:
+                profile.is_verified = True
+            profile.save()
 
         return Response({
             "message": f"Successfully subscribed to the '{plan.name}' plan!",
+            "idempotent_replay": False,
             "subscription": {
                 "id": str(sub.id),
                 "plan_name": plan.name,
@@ -232,17 +274,18 @@ class AgentCancelSubscriptionView(generics.GenericAPIView):
     )
     def post(self, request, *args, **kwargs):
         user = request.user
-        active_sub = AgentSubscription.objects.filter(agent=user, status='active').first()
+        with db_transaction.atomic():
+            User.objects.select_for_update().filter(pk=user.pk).first()
+            AgentSubscription.objects.select_for_update().filter(agent=user, status='active').update(
+                auto_renew=False,
+                status='cancelled',
+                updated_at=timezone.now()
+            )
 
-        if active_sub:
-            active_sub.auto_renew = False
-            active_sub.status = 'cancelled'
-            active_sub.save()
-
-        profile = getattr(user, 'agent_profile', None)
-        if profile:
-            profile.plan = None
-            profile.save()
+            profile = AgentProfile.objects.select_for_update().filter(user=user).first()
+            if profile:
+                profile.plan = None
+                profile.save(update_fields=['plan'])
 
         return Response({
             "message": "Your subscription has been cancelled successfully. You are now on the Free tier."

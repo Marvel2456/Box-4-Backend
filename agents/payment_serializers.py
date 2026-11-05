@@ -34,6 +34,13 @@ class PaymentInitializeRequestSerializer(serializers.Serializer):
         allow_null=True,
         help_text="Optional callback URL / deep-link to redirect the user after Paystack checkout."
     )
+    idempotency_key = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=100,
+        help_text="Optional client-generated idempotency key (can also be sent via 'Idempotency-Key' HTTP header) to prevent duplicate payment initializations."
+    )
 
     def validate(self, attrs):
         payment_type = attrs.get('payment_type')

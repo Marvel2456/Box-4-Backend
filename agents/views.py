@@ -298,9 +298,10 @@ class ListingBoostView(generics.GenericAPIView):
     )
     def post(self, request, pk, *args, **kwargs):
         from .utils import get_default_boost_plan, expire_outdated_boosts
-        from .payment_views import fulfill_payment_transaction
+        from .payment_views import fulfill_payment_transaction, extract_scoped_idempotency_key
         from core.paystack import paystack_service
         from profiles.models import PaymentTransaction
+        from django.db import transaction as db_transaction, IntegrityError
         from django.conf import settings
         import uuid
 
@@ -314,9 +315,11 @@ class ListingBoostView(generics.GenericAPIView):
         # Toggle off / unboost is always allowed
         action = request.data.get('action')
         if action == 'unboost' or (listing.is_boosted and request.data.get('is_boosted') is False and not request.data.get('boost_plan_id')):
-            listing.is_boosted = False
-            listing.save()
-            ListingBoostPlacement.objects.filter(listing=listing, status='active').update(status='cancelled')
+            with db_transaction.atomic():
+                locked_listing = Listing.objects.select_for_update().get(pk=listing.pk)
+                locked_listing.is_boosted = False
+                locked_listing.save(update_fields=['is_boosted', 'updated_at'])
+                ListingBoostPlacement.objects.select_for_update().filter(listing=locked_listing, status='active').update(status='cancelled')
             return Response({
                 "message": "Listing unboosted successfully.",
                 "is_boosted": False
@@ -335,23 +338,84 @@ class ListingBoostView(generics.GenericAPIView):
 
         duration_days = boost_plan.duration_days
         amount = float(boost_plan.price)
+        scoped_idempotency_key = extract_scoped_idempotency_key(request)
 
         # Check if client requested Paystack payment initialization
         if action == 'initialize' or request.data.get('initialize') is True or request.data.get('payment_type') == 'paystack':
-            unique_suffix = uuid.uuid4().hex[:10]
-            reference = f"BOOST_{listing.id}_{unique_suffix}"
             item_name = f"Boost: {listing.title} ({duration_days} days)"
 
-            transaction = PaymentTransaction.objects.create(
-                user=request.user,
-                reference=reference,
-                transaction_type='boost',
-                amount=amount,
-                currency='NGN',
-                status='pending',
-                boost_plan=boost_plan,
-                listing=listing
-            )
+            with db_transaction.atomic():
+                Listing.objects.select_for_update().filter(pk=listing.pk).first()
+
+                existing_tx = None
+                if scoped_idempotency_key:
+                    existing_tx = (
+                        PaymentTransaction.objects
+                        .select_for_update()
+                        .filter(idempotency_key=scoped_idempotency_key)
+                        .first()
+                    )
+                else:
+                    recent_cutoff = timezone.now() - timedelta(seconds=30)
+                    existing_tx = (
+                        PaymentTransaction.objects
+                        .select_for_update()
+                        .filter(
+                            user=request.user,
+                            transaction_type='boost',
+                            boost_plan=boost_plan,
+                            listing=listing,
+                            amount=amount,
+                            status='pending',
+                            created_at__gte=recent_cutoff,
+                        )
+                        .order_by('-created_at')
+                        .first()
+                    )
+
+                if existing_tx:
+                    cached_data = (existing_tx.paystack_response or {}).get('data') or {}
+                    if existing_tx.status == 'pending' and cached_data.get('authorization_url'):
+                        return Response({
+                            "message": "Payment initialized successfully.",
+                            "authorization_url": cached_data.get('authorization_url'),
+                            "access_code": cached_data.get('access_code'),
+                            "reference": existing_tx.reference,
+                            "amount": float(existing_tx.amount),
+                            "currency": existing_tx.currency,
+                            "public_key": settings.PAYSTACK_PUBLIC_KEY,
+                            "idempotent_replay": True,
+                            "boost_plan": {
+                                "id": str(boost_plan.id),
+                                "name": boost_plan.name,
+                                "duration_days": duration_days,
+                                "price": amount
+                            }
+                        }, status=status.HTTP_200_OK)
+
+                unique_suffix = uuid.uuid4().hex[:10]
+                reference = f"BOOST_{listing.id}_{unique_suffix}"
+
+                if existing_tx and existing_tx.status in ['pending', 'failed']:
+                    existing_tx.reference = reference
+                    existing_tx.amount = amount
+                    existing_tx.status = 'pending'
+                    existing_tx.boost_plan = boost_plan
+                    existing_tx.listing = listing
+                    existing_tx.save()
+                    transaction = existing_tx
+                else:
+                    transaction = PaymentTransaction.objects.create(
+                        user=request.user,
+                        reference=reference,
+                        idempotency_key=scoped_idempotency_key,
+                        transaction_type='boost',
+                        amount=amount,
+                        currency='NGN',
+                        status='pending',
+                        boost_plan=boost_plan,
+                        listing=listing
+                    )
 
             paystack_res = paystack_service.initialize_payment(
                 email=request.user.email,
@@ -370,11 +434,19 @@ class ListingBoostView(generics.GenericAPIView):
             )
 
             if not paystack_res.get('status'):
-                transaction.status = 'failed'
-                transaction.save()
+                PaymentTransaction.objects.filter(pk=transaction.pk).update(
+                    status='failed',
+                    paystack_response=paystack_res,
+                    updated_at=timezone.now()
+                )
                 return Response({
                     "error": paystack_res.get('message', "Failed to initialize Paystack payment.")
                 }, status=status.HTTP_400_BAD_REQUEST)
+
+            PaymentTransaction.objects.filter(pk=transaction.pk).update(
+                paystack_response=paystack_res,
+                updated_at=timezone.now()
+            )
 
             paystack_data = paystack_res.get('data', {})
             return Response({
@@ -385,6 +457,7 @@ class ListingBoostView(generics.GenericAPIView):
                 "amount": amount,
                 "currency": "NGN",
                 "public_key": settings.PAYSTACK_PUBLIC_KEY,
+                "idempotent_replay": False,
                 "boost_plan": {
                     "id": str(boost_plan.id),
                     "name": boost_plan.name,
@@ -393,68 +466,162 @@ class ListingBoostView(generics.GenericAPIView):
                 }
             }, status=status.HTTP_200_OK)
 
-        payment_ref = request.data.get('payment_reference')
+        payment_ref = (request.data.get('payment_reference') or '').strip() or None
+        effective_ref = payment_ref or scoped_idempotency_key
 
-        # If payment_reference provided, verify with Paystack and fulfill
+        # Fast-path idempotency: if this payment_reference / idempotency_key was already fulfilled for this listing
+        if effective_ref:
+            existing_placement = (
+                ListingBoostPlacement.objects
+                .select_related('boost_plan')
+                .filter(listing=listing, payment_reference=effective_ref)
+                .first()
+            )
+            if existing_placement:
+                active_bp = existing_placement.boost_plan or boost_plan
+                return Response({
+                    "message": f"Listing boosted successfully for {existing_placement.duration_days} days!",
+                    "is_boosted": True,
+                    "idempotent_replay": True,
+                    "placement": {
+                        "id": str(existing_placement.id),
+                        "boost_plan_name": active_bp.name if active_bp else f"{existing_placement.duration_days} Days Boost",
+                        "duration_days": existing_placement.duration_days,
+                        "amount": float(existing_placement.amount),
+                        "date_started": existing_placement.date_started,
+                        "date_expires": existing_placement.date_expires
+                    }
+                }, status=status.HTTP_200_OK)
+
+        # If payment_reference provided, verify with Paystack and fulfill atomically
         if payment_ref:
             transaction = PaymentTransaction.objects.filter(reference=payment_ref).first()
+            if transaction and transaction.user != request.user and request.user.role != 'admin':
+                return Response(
+                    {"error": "You do not have permission to use this payment reference."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
             if not transaction:
-                # Check directly with Paystack API if not in DB yet
-                paystack_res = paystack_service.verify_payment(payment_ref)
-                if paystack_res.get('status') and paystack_res.get('data', {}).get('status') == 'success':
-                    data = paystack_res.get('data', {})
-                    transaction = PaymentTransaction.objects.create(
-                        user=request.user,
-                        reference=payment_ref,
-                        transaction_type='boost',
-                        amount=amount,
-                        currency=data.get('currency', 'NGN'),
-                        status='pending',
-                        boost_plan=boost_plan,
-                        listing=listing
-                    )
-                    fulfill_payment_transaction(transaction, data)
-                elif payment_ref.startswith('REF-') or payment_ref.startswith('TEST-'):
-                    # Test / mock reference support
-                    transaction = PaymentTransaction.objects.create(
-                        user=request.user,
-                        reference=payment_ref,
-                        transaction_type='boost',
-                        amount=amount,
-                        currency='NGN',
-                        status='success',
-                        boost_plan=boost_plan,
-                        listing=listing,
-                        paid_at=timezone.now()
-                    )
+                if payment_ref.startswith('REF-') or payment_ref.startswith('TEST-'):
+                    try:
+                        with db_transaction.atomic():
+                            transaction, _ = PaymentTransaction.objects.get_or_create(
+                                reference=payment_ref,
+                                defaults={
+                                    'user': request.user,
+                                    'transaction_type': 'boost',
+                                    'amount': amount,
+                                    'currency': 'NGN',
+                                    'status': 'pending',
+                                    'boost_plan': boost_plan,
+                                    'listing': listing,
+                                }
+                            )
+                    except IntegrityError:
+                        transaction = PaymentTransaction.objects.get(reference=payment_ref)
+                    fulfill_payment_transaction(transaction)
+                else:
+                    paystack_res = paystack_service.verify_payment(payment_ref)
+                    if paystack_res.get('status') and paystack_res.get('data', {}).get('status') == 'success':
+                        data = paystack_res.get('data', {})
+                        try:
+                            with db_transaction.atomic():
+                                transaction, _ = PaymentTransaction.objects.get_or_create(
+                                    reference=payment_ref,
+                                    defaults={
+                                        'user': request.user,
+                                        'transaction_type': 'boost',
+                                        'amount': amount,
+                                        'currency': data.get('currency', 'NGN'),
+                                        'status': 'pending',
+                                        'boost_plan': boost_plan,
+                                        'listing': listing,
+                                    }
+                                )
+                        except IntegrityError:
+                            transaction = PaymentTransaction.objects.get(reference=payment_ref)
+                        fulfill_payment_transaction(transaction, data)
             elif transaction.status != 'success':
                 paystack_res = paystack_service.verify_payment(payment_ref)
                 if paystack_res.get('status') and paystack_res.get('data', {}).get('status') == 'success':
                     fulfill_payment_transaction(transaction, paystack_res.get('data', {}))
+            else:
+                fulfill_payment_transaction(transaction)
 
-        # Direct activation / fulfillment
-        date_expires = timezone.now() + timedelta(days=duration_days)
+            placement = (
+                ListingBoostPlacement.objects
+                .select_related('boost_plan')
+                .filter(listing=listing, payment_reference=payment_ref)
+                .first()
+            )
+            if placement:
+                active_bp = placement.boost_plan or boost_plan
+                return Response({
+                    "message": f"Listing boosted successfully for {placement.duration_days} days!",
+                    "is_boosted": True,
+                    "idempotent_replay": False,
+                    "placement": {
+                        "id": str(placement.id),
+                        "boost_plan_name": active_bp.name if active_bp else f"{placement.duration_days} Days Boost",
+                        "duration_days": placement.duration_days,
+                        "amount": float(placement.amount),
+                        "date_started": placement.date_started,
+                        "date_expires": placement.date_expires
+                    }
+                }, status=status.HTTP_200_OK)
 
-        # Deactivate previous active placements for this listing
-        ListingBoostPlacement.objects.filter(listing=listing, status='active').update(status='expired')
+        # Direct activation / fulfillment under atomic row lock
+        with db_transaction.atomic():
+            locked_listing = Listing.objects.select_for_update().get(pk=listing.pk)
 
-        placement = ListingBoostPlacement.objects.create(
-            listing=listing,
-            agent=listing.agent,
-            boost_plan=boost_plan,
-            amount=amount,
-            duration_days=duration_days,
-            date_expires=date_expires,
-            status='active',
-            payment_reference=payment_ref
-        )
+            if effective_ref:
+                existing_placement = (
+                    ListingBoostPlacement.objects
+                    .select_for_update()
+                    .select_related('boost_plan')
+                    .filter(listing=locked_listing, payment_reference=effective_ref)
+                    .first()
+                )
+                if existing_placement:
+                    active_bp = existing_placement.boost_plan or boost_plan
+                    return Response({
+                        "message": f"Listing boosted successfully for {existing_placement.duration_days} days!",
+                        "is_boosted": True,
+                        "idempotent_replay": True,
+                        "placement": {
+                            "id": str(existing_placement.id),
+                            "boost_plan_name": active_bp.name if active_bp else f"{existing_placement.duration_days} Days Boost",
+                            "duration_days": existing_placement.duration_days,
+                            "amount": float(existing_placement.amount),
+                            "date_started": existing_placement.date_started,
+                            "date_expires": existing_placement.date_expires
+                        }
+                    }, status=status.HTTP_200_OK)
 
-        listing.is_boosted = True
-        listing.save()
+            date_expires = timezone.now() + timedelta(days=duration_days)
+
+            # Deactivate previous active placements for this listing under lock
+            ListingBoostPlacement.objects.select_for_update().filter(listing=locked_listing, status='active').update(status='expired')
+
+            placement = ListingBoostPlacement.objects.create(
+                listing=locked_listing,
+                agent=locked_listing.agent,
+                boost_plan=boost_plan,
+                amount=amount,
+                duration_days=duration_days,
+                date_expires=date_expires,
+                status='active',
+                payment_reference=effective_ref
+            )
+
+            locked_listing.is_boosted = True
+            locked_listing.save(update_fields=['is_boosted', 'updated_at'])
 
         return Response({
             "message": f"Listing boosted successfully for {duration_days} days!",
             "is_boosted": True,
+            "idempotent_replay": False,
             "placement": {
                 "id": str(placement.id),
                 "boost_plan_name": boost_plan.name if boost_plan else f"{duration_days} Days Boost",
@@ -476,42 +643,70 @@ class ListingFeatureView(generics.GenericAPIView):
         responses={200: "Listing featured / unfeatured successfully."}
     )
     def post(self, request, pk, *args, **kwargs):
+        from django.db import transaction as db_transaction
+
         listing = self.get_object()
         
         # Verify ownership
         if listing.agent != request.user and request.user.role != 'admin':
             return Response({"error": "You do not have permission to manage this listing."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Toggle off is always allowed
-        if listing.is_featured:
-            listing.is_featured = False
-            listing.save()
-            return Response({
-                "message": "Listing removed from featured list successfully.",
-                "is_featured": listing.is_featured
-            }, status=status.HTTP_200_OK)
+        action = request.data.get('action')
+        explicit_is_featured = request.data.get('is_featured')
 
-        # Toggle on requires plan check
-        try:
-            profile = listing.agent.agent_profile
-        except AgentProfile.DoesNotExist:
-            return Response({"error": "Agent profile not found."}, status=status.HTTP_400_BAD_REQUEST)
+        with db_transaction.atomic():
+            # Lock agent profile and listing rows to prevent TOCTOU quota bypass on concurrent feature requests
+            profile = (
+                AgentProfile.objects
+                .select_for_update()
+                .select_related('plan')
+                .filter(user=listing.agent)
+                .first()
+            )
+            locked_listing = Listing.objects.select_for_update().get(pk=listing.pk)
 
-        plan = profile.plan
-        if not plan:
-            return Response({"error": "No active subscription plan found. Please subscribe to feature listings."}, status=status.HTTP_403_FORBIDDEN)
+            wants_unfeature = (
+                action == 'unfeature'
+                or explicit_is_featured is False
+                or (action is None and explicit_is_featured is None and locked_listing.is_featured)
+            )
 
-        current_featured_count = Listing.objects.filter(agent=listing.agent, is_featured=True).count()
-        if current_featured_count >= plan.max_featured:
-            return Response({
-                "error": f"You have reached your plan limit of {plan.max_featured} featured listings on the '{plan.name}' plan. Please upgrade to feature more."
-            }, status=status.HTTP_403_FORBIDDEN)
+            if wants_unfeature:
+                if locked_listing.is_featured:
+                    locked_listing.is_featured = False
+                    locked_listing.save(update_fields=['is_featured', 'updated_at'])
+                return Response({
+                    "message": "Listing removed from featured list successfully.",
+                    "is_featured": False
+                }, status=status.HTTP_200_OK)
 
-        listing.is_featured = True
-        listing.save()
+            # Idempotent replay if caller explicitly requested featuring an already-featured listing
+            if locked_listing.is_featured:
+                return Response({
+                    "message": "Listing featured successfully!",
+                    "is_featured": True,
+                    "idempotent_replay": True
+                }, status=status.HTTP_200_OK)
+
+            if not profile:
+                return Response({"error": "Agent profile not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+            plan = profile.plan
+            if not plan:
+                return Response({"error": "No active subscription plan found. Please subscribe to feature listings."}, status=status.HTTP_403_FORBIDDEN)
+
+            current_featured_count = Listing.objects.select_for_update().filter(agent=locked_listing.agent, is_featured=True).count()
+            if plan.max_featured > 0 and current_featured_count >= plan.max_featured:
+                return Response({
+                    "error": f"You have reached your plan limit of {plan.max_featured} featured listings on the '{plan.name}' plan. Please upgrade to feature more."
+                }, status=status.HTTP_403_FORBIDDEN)
+
+            locked_listing.is_featured = True
+            locked_listing.save(update_fields=['is_featured', 'updated_at'])
+
         return Response({
             "message": "Listing featured successfully!",
-            "is_featured": listing.is_featured
+            "is_featured": True
         }, status=status.HTTP_200_OK)
 
 

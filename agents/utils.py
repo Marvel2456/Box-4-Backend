@@ -33,24 +33,27 @@ def expire_outdated_boosts():
     Reverts listing.is_boosted to False if the listing has no other active boost placements.
     Returns the count of placements expired in this run.
     """
+    from django.db import transaction as db_transaction
+
     now = timezone.now()
-    expired_placements = ListingBoostPlacement.objects.filter(
-        status='active',
-        date_expires__lte=now
-    )
-    if not expired_placements.exists():
-        return 0
-
-    listing_ids = list(expired_placements.values_list('listing_id', flat=True).distinct())
-    count = expired_placements.update(status='expired')
-
-    for listing_id in listing_ids:
-        has_active = ListingBoostPlacement.objects.filter(
-            listing_id=listing_id,
+    with db_transaction.atomic():
+        expired_placements = ListingBoostPlacement.objects.select_for_update().filter(
             status='active',
-            date_expires__gt=now
-        ).exists()
-        if not has_active:
-            Listing.objects.filter(id=listing_id).update(is_boosted=False)
+            date_expires__lte=now
+        )
+        listing_ids = list(expired_placements.values_list('listing_id', flat=True).distinct())
+        if not listing_ids:
+            return 0
+
+        count = expired_placements.update(status='expired', updated_at=now)
+
+        for listing_id in listing_ids:
+            has_active = ListingBoostPlacement.objects.filter(
+                listing_id=listing_id,
+                status='active',
+                date_expires__gt=now
+            ).exists()
+            if not has_active:
+                Listing.objects.select_for_update().filter(id=listing_id).update(is_boosted=False, updated_at=now)
 
     return count

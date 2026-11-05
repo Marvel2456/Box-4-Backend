@@ -74,6 +74,7 @@ class AgentSubscribeSerializer(serializers.Serializer):
     payment_method = serializers.CharField(required=False, default="card", help_text="Payment method e.g. 'card', 'bank_transfer', 'paystack'.")
     auto_renew = serializers.BooleanField(required=False, default=True)
     transaction_reference = serializers.CharField(required=False, allow_blank=True, default=None)
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, default=None, max_length=100)
 
     def validate_plan_id(self, value):
         try:
@@ -100,6 +101,7 @@ class ListingBoostRequestSerializer(serializers.Serializer):
     boost_plan_id = serializers.UUIDField(help_text="UUID of the boost plan/duration package to apply.")
     payment_method = serializers.CharField(required=False, default="card")
     payment_reference = serializers.CharField(required=False, allow_blank=True, default=None)
+    idempotency_key = serializers.CharField(required=False, allow_blank=True, default=None, max_length=100)
 
     def validate_boost_plan_id(self, value):
         try:
