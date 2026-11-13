@@ -120,7 +120,9 @@ def filter_listings_queryset(queryset, request):
 
     is_boosted = request.query_params.get('is_boosted')
     if is_boosted is not None:
-        queryset = queryset.filter(is_boosted=(is_boosted.lower() in ['true', '1']))
+        from core.utils import is_ios_client
+        if not is_ios_client(request):
+            queryset = queryset.filter(is_boosted=(is_boosted.lower() in ['true', '1']))
 
     is_featured = request.query_params.get('is_featured')
     if is_featured is not None:

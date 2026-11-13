@@ -90,16 +90,38 @@ def is_firebase_configured():
         return False
 
 
-def send_push_notification(user, title, body, data=None):
+def is_boost_notification_payload(title=None, body=None, data=None):
+    """
+    Detects whether a push notification is boost-related (e.g. boost expiring, boost ended, renewal).
+    """
+    if isinstance(data, dict):
+        notif_type = str(data.get('type') or '').lower()
+        if 'boost' in notif_type:
+            return True
+    combined_text = f"{title or ''} {body or ''}".lower()
+    return 'boost' in combined_text
+
+
+def send_push_notification(user, title, body, data=None, exclude_platforms=None):
     """
     Sends FCM push notification to all active DeviceToken records belonging to the given user.
+    Automatically excludes iOS devices for any boost-related notifications (App Store compliance).
     Handles invalid/expired registration tokens by automatically deactivating them.
     """
     if not user:
         return 0
 
     from notifications.models import DeviceToken
-    device_tokens = list(DeviceToken.objects.filter(user=user, is_active=True).values_list('token', flat=True))
+    tokens_qs = DeviceToken.objects.filter(user=user, is_active=True)
+
+    excluded = {str(p).strip().lower() for p in (exclude_platforms or []) if p}
+    if is_boost_notification_payload(title=title, body=body, data=data):
+        excluded.add('ios')
+
+    for platform in excluded:
+        tokens_qs = tokens_qs.exclude(platform__iexact=platform)
+
+    device_tokens = list(tokens_qs.values_list('token', flat=True))
     if not device_tokens:
         return 0
 

@@ -1,8 +1,10 @@
 from rest_framework import viewsets, status, permissions, generics
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db.models import Q
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from core.utils import is_ios_client
 
 from .models import Notification, DeviceToken
 from .serializers import (
@@ -37,6 +39,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
             elif is_read_param.lower() in ['false', '0']:
                 queryset = queryset.filter(is_read=False)
 
+        if is_ios_client(getattr(self, 'request', None)):
+            queryset = queryset.exclude(
+                Q(title__icontains='boost') | Q(message__icontains='boost')
+            )
+
         return queryset
 
     @swagger_auto_schema(
@@ -50,14 +57,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='unread-count')
     def unread_count(self, request):
-        count = Notification.objects.filter(
-            recipient=request.user, 
-            is_read=False
-        ).exclude(
-            sender__is_deleted=True
-        ).exclude(
-            sender__is_active=False
-        ).count()
+        count = self.get_queryset().filter(is_read=False).count()
         return Response({"unread_count": count}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['patch'], url_path='read')

@@ -1184,5 +1184,171 @@ class PaystackPaymentAPITests(APITestCase):
         self.listing.refresh_from_db()
         self.assertFalse(self.listing.is_boosted)
 
+    @patch('core.paystack.PaystackService.initialize_payment')
+    def test_payment_initialize_idempotency_key_and_double_click_protection(self, mock_paystack_init):
+        mock_paystack_init.return_value = {
+            'status': True,
+            'message': 'Authorization URL created',
+            'data': {
+                'authorization_url': 'https://checkout.paystack.com/idempotent-sub-url',
+                'access_code': 'idempotent_access_123',
+                'reference': 'SUB_IDEMPOTENT_123'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        payload = {
+            "payment_type": "subscription",
+            "plan_id": str(self.plan.id),
+        }
+
+        # 1. First call with Idempotency-Key header
+        res1 = self.client.post(self.initialize_url, payload, HTTP_IDEMPOTENCY_KEY="idem-key-sub-001")
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertFalse(res1.data['idempotent_replay'])
+
+        # 2. Second call with same Idempotency-Key header returns identical reference without calling Paystack again
+        res2 = self.client.post(self.initialize_url, payload, HTTP_IDEMPOTENCY_KEY="idem-key-sub-001")
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertTrue(res2.data['idempotent_replay'])
+        self.assertEqual(res1.data['reference'], res2.data['reference'])
+        self.assertEqual(res1.data['authorization_url'], res2.data['authorization_url'])
+        self.assertEqual(mock_paystack_init.call_count, 1)
+        self.assertEqual(PaymentTransaction.objects.filter(user=self.agent, transaction_type='subscription').count(), 1)
+
+        # 3. Rapid double-click without Idempotency-Key also reuses the recent pending transaction
+        res3 = self.client.post(self.initialize_url, payload)
+        self.assertEqual(res3.status_code, status.HTTP_200_OK)
+        self.assertTrue(res3.data['idempotent_replay'])
+        self.assertEqual(res3.data['reference'], res1.data['reference'])
+        self.assertEqual(mock_paystack_init.call_count, 1)
+
+    @patch('core.paystack.PaystackService.verify_payment')
+    def test_webhook_and_verify_race_condition_and_idempotency(self, mock_paystack_verify):
+        ref = "RACE_SUB_TX_001"
+        tx = PaymentTransaction.objects.create(
+            user=self.agent,
+            reference=ref,
+            transaction_type='subscription',
+            amount=25000.00,
+            plan=self.plan,
+            status='pending'
+        )
+
+        mock_paystack_verify.return_value = {
+            'status': True,
+            'data': {
+                'status': 'success',
+                'reference': ref,
+                'amount': 2500000,
+                'channel': 'card',
+                'currency': 'NGN',
+                'gateway_response': 'Successful'
+            }
+        }
+
+        # 1. Webhook arrives first and fulfills the transaction
+        webhook_payload = {
+            "event": "charge.success",
+            "data": {
+                "reference": ref,
+                "amount": 2500000,
+                "status": "success",
+                "channel": "card"
+            }
+        }
+        raw_bytes = json.dumps(webhook_payload).encode('utf-8')
+        secret = (settings.PAYSTACK_SECRET_KEY or 'test_secret').encode('utf-8')
+        sig = hmac.new(secret, raw_bytes, hashlib.sha512).hexdigest()
+
+        wh_res = self.client.post(self.webhook_url, raw_bytes, content_type='application/json', HTTP_X_PAYSTACK_SIGNATURE=sig)
+        self.assertEqual(wh_res.status_code, status.HTTP_200_OK)
+
+        # 2. Client calls verify endpoint right after (and a second time on retry)
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        ver_res1 = self.client.post(self.verify_url, {"reference": ref})
+        self.assertEqual(ver_res1.status_code, status.HTTP_200_OK)
+        self.assertTrue(ver_res1.data['idempotent_replay'])
+
+        # 3. Direct call to fulfill_payment_transaction again
+        from agents.payment_views import fulfill_payment_transaction
+        fulfill_payment_transaction(tx)
+
+        # Verify that Paystack verify API wasn't even needed because webhook already fulfilled it,
+        # and only ONE AgentSubscription record was created for this reference
+        self.assertEqual(mock_paystack_verify.call_count, 0)
+        self.assertEqual(AgentSubscription.objects.filter(agent=self.agent, transaction_reference=ref).count(), 1)
+        self.assertEqual(AgentSubscription.objects.filter(agent=self.agent, status='active').count(), 1)
+
+    @patch('core.paystack.PaystackService.verify_payment')
+    def test_one_time_boost_idempotency_no_duplicate_placements(self, mock_paystack_verify):
+        ref = "BOOST_IDEMPOTENT_REF_001"
+        mock_paystack_verify.return_value = {
+            'status': True,
+            'data': {
+                'status': 'success',
+                'reference': ref,
+                'amount': 500000,
+                'channel': 'card',
+                'currency': 'NGN',
+                'gateway_response': 'Successful'
+            }
+        }
+
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        boost_url = reverse('listing-boost', kwargs={'pk': self.listing.id})
+
+        # 1. First boost call with payment_reference
+        res1 = self.client.post(boost_url, {
+            "payment_reference": ref,
+            "boost_plan_id": str(self.boost_plan.id)
+        })
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertFalse(res1.data['idempotent_replay'])
+        placement_id_1 = res1.data['placement']['id']
+
+        # 2. Second boost call with the same payment_reference (retry / duplicate request)
+        res2 = self.client.post(boost_url, {
+            "payment_reference": ref,
+            "boost_plan_id": str(self.boost_plan.id)
+        })
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertTrue(res2.data['idempotent_replay'])
+        self.assertEqual(res2.data['placement']['id'], placement_id_1)
+
+        # Exactly 1 placement exists in DB (previously 2 were created even on a single request)
+        self.assertEqual(ListingBoostPlacement.objects.filter(listing=self.listing, payment_reference=ref).count(), 1)
+        self.assertEqual(mock_paystack_verify.call_count, 1)
+
+    def test_direct_subscribe_endpoint_idempotency(self):
+        token = self.get_jwt_token("payagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        sub_url = reverse('agent-subscription-subscribe')
+        payload = {
+            "plan_id": str(self.plan.id),
+            "payment_method": "card",
+            "transaction_reference": "DIRECT_SUB_REF_999"
+        }
+
+        res1 = self.client.post(sub_url, payload)
+        self.assertEqual(res1.status_code, status.HTTP_200_OK)
+        self.assertFalse(res1.data['idempotent_replay'])
+        sub_id_1 = res1.data['subscription']['id']
+
+        # Retry with the same transaction_reference returns the exact same subscription without creating a duplicate
+        res2 = self.client.post(sub_url, payload)
+        self.assertEqual(res2.status_code, status.HTTP_200_OK)
+        self.assertTrue(res2.data['idempotent_replay'])
+        self.assertEqual(res2.data['subscription']['id'], sub_id_1)
+        self.assertEqual(AgentSubscription.objects.filter(agent=self.agent, transaction_reference="DIRECT_SUB_REF_999").count(), 1)
+
+
 
 

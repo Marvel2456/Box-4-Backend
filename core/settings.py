@@ -209,6 +209,12 @@ SIMPLE_JWT = {
 
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = True
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    'x-client-platform',
+    'idempotency-key',
+    'x-idempotency-key',
+]
 
 # Resend Email Configuration
 RESEND_API_KEY = (os.getenv('RESEND_API_KEY') or '').strip()

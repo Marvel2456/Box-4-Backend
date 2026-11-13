@@ -19,6 +19,7 @@ from agents.models import Listing
 from agents.serializers import ListingSerializer
 from profiles.models import BuyerProfile
 from profiles.serializers import BuyerProfileSerializer
+from core.utils import is_ios_client
 
 User = get_user_model()
 
@@ -61,9 +62,12 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         from agents.utils import expire_outdated_boosts
         expire_outdated_boosts()
-        return Listing.objects.filter(is_published=True).select_related(
+        qs = Listing.objects.filter(is_published=True).select_related(
             'category', 'agent'
-        ).prefetch_related('tag', 'images').order_by('-is_featured', '-is_boosted', '-created_at')
+        ).prefetch_related('tag', 'images')
+        if is_ios_client(getattr(self, 'request', None)):
+            return qs.order_by('-is_featured', '-created_at')
+        return qs.order_by('-is_featured', '-is_boosted', '-created_at')
 
     @swagger_auto_schema(
         operation_description="Search and filter published property listings for mobile buyers.",
@@ -199,11 +203,17 @@ class BuyerPropertyViewSet(viewsets.ReadOnlyModelViewSet):
     @swagger_auto_schema(responses={200: ListingSerializer(many=True)})
     @action(detail=False, methods=['get'])
     def top(self, request):
-        # Expose top listings / ads (boosted or featured), ranked by featured status then boosted status
-        ads = Listing.objects.filter(
-            Q(is_boosted=True) | Q(is_featured=True),
-            is_published=True
-        ).order_by('-is_featured', '-is_boosted', '-created_at')
+        # Expose top listings / ads (featured only on iOS; boosted or featured on Android/default)
+        if is_ios_client(request):
+            ads = Listing.objects.filter(
+                is_featured=True,
+                is_published=True
+            ).order_by('-is_featured', '-created_at')
+        else:
+            ads = Listing.objects.filter(
+                Q(is_boosted=True) | Q(is_featured=True),
+                is_published=True
+            ).order_by('-is_featured', '-is_boosted', '-created_at')
         
         page = self.paginate_queryset(ads)
         if page is not None:

@@ -55,5 +55,21 @@ def expire_outdated_boosts():
             ).exists()
             if not has_active:
                 Listing.objects.select_for_update().filter(id=listing_id).update(is_boosted=False, updated_at=now)
+                listing_obj = Listing.objects.select_related('agent').filter(id=listing_id).first()
+                if listing_obj and listing_obj.agent:
+                    try:
+                        from core.firebase import send_push_notification
+                        send_push_notification(
+                            user=listing_obj.agent,
+                            title="Boost Ended",
+                            body=f"The boost for your listing '{listing_obj.title}' has ended.",
+                            data={
+                                "type": "boost_ended",
+                                "listing_id": str(listing_obj.id),
+                            },
+                            exclude_platforms=['ios'],
+                        )
+                    except Exception:
+                        pass
 
     return count

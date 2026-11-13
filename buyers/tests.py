@@ -524,3 +524,61 @@ class BuyerAPITests(APITestCase):
         self.assertEqual(res_book.data['booking_details']['preferred_date'], "2026-10-30")
         self.assertEqual(res_book.data['booking_details']['preferred_time'], "15:30")
         self.assertIn("Coming with my spouse.", res_book.data['chat_message']['message'])
+
+    def test_ios_client_hides_boost_ranking_and_flags(self):
+        # listing_a is created first and boosted (is_boosted=True, is_featured=False)
+        # listing_c is created after listing_a and is NOT boosted (is_boosted=False, is_featured=False)
+        # listing_b is featured (is_featured=True, is_boosted=False)
+        self.listing_b.is_featured = True
+        self.listing_b.save()
+
+        # 1. Android / missing header: boosted listing_a ranks ahead of newer unboosted listing_c
+        res_default = self.client.get(self.search_url)
+        self.assertEqual(res_default.status_code, status.HTTP_200_OK)
+        default_titles = [item['title'] for item in res_default.data['results']]
+        self.assertEqual(default_titles[0], "Yaba Apartment")  # featured first
+        self.assertEqual(default_titles[1], "Lekki Duplex")    # boosted second
+        self.assertTrue(res_default.data['results'][1]['is_boosted'])
+
+        res_android = self.client.get(self.search_url, HTTP_X_CLIENT_PLATFORM='android')
+        self.assertEqual(res_android.status_code, status.HTTP_200_OK)
+        android_titles = [item['title'] for item in res_android.data['results']]
+        self.assertEqual(android_titles[1], "Lekki Duplex")
+        self.assertTrue(res_android.data['results'][1]['is_boosted'])
+
+        # 2. iOS header: boost ranking is ignored (featured still first, then newest: listing_c before listing_a)
+        res_ios = self.client.get(self.search_url, HTTP_X_CLIENT_PLATFORM='ios')
+        self.assertEqual(res_ios.status_code, status.HTTP_200_OK)
+        ios_results = res_ios.data['results']
+        ios_titles = [item['title'] for item in ios_results]
+        self.assertEqual(ios_titles[0], "Yaba Apartment")  # featured stays first
+        self.assertEqual(ios_titles[1], "Abuja Mansion")   # newer unboosted ranks above older boosted
+        self.assertEqual(ios_titles[2], "Lekki Duplex")
+        self.assertTrue(all(item['is_boosted'] is False for item in ios_results))
+
+        # 3. /buyers/properties/top/: boosted-only listing_a is excluded on iOS, included on Android
+        top_android = self.client.get(self.top_url, HTTP_X_CLIENT_PLATFORM='android')
+        self.assertEqual(top_android.status_code, status.HTTP_200_OK)
+        top_android_titles = [item['title'] for item in top_android.data['results']]
+        self.assertIn("Lekki Duplex", top_android_titles)
+        self.assertIn("Yaba Apartment", top_android_titles)
+
+        top_ios = self.client.get(self.top_url, HTTP_X_CLIENT_PLATFORM='ios')
+        self.assertEqual(top_ios.status_code, status.HTTP_200_OK)
+        top_ios_results = top_ios.data['results']
+        top_ios_titles = [item['title'] for item in top_ios_results]
+        self.assertNotIn("Lekki Duplex", top_ios_titles)
+        self.assertIn("Yaba Apartment", top_ios_titles)
+        self.assertTrue(all(item['is_boosted'] is False for item in top_ios_results))
+
+        # 4. /buyers/dashboard/ returns is_boosted: False on iOS
+        dash_url = reverse('buyer-dashboard')
+        dash_ios = self.client.get(dash_url, HTTP_X_CLIENT_PLATFORM='ios')
+        self.assertEqual(dash_ios.status_code, status.HTTP_200_OK)
+        self.assertTrue(all(item['is_boosted'] is False for item in dash_ios.data['nearest_properties']))
+
+        # 5. /buyers/agents/<id>/ returns is_boosted: False on iOS
+        agent_detail_url = reverse('buyer-agents-detail', kwargs={'pk': self.agent_user.id})
+        agent_ios = self.client.get(agent_detail_url, HTTP_X_CLIENT_PLATFORM='ios')
+        self.assertEqual(agent_ios.status_code, status.HTTP_200_OK)
+        self.assertTrue(all(item['is_boosted'] is False for item in agent_ios.data['listings']))

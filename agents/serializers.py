@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import Listing, ListingImage, Category, Tag
 from profiles.models import AgentProfile
 from core.serializers import CoordinateField
+from core.utils import is_ios_client
 
 User = get_user_model()
 
@@ -82,6 +83,12 @@ class ListingSerializer(serializers.ModelSerializer):
             'images', 'image_urls', 'image_ids', 'uploaded_images', 'created_at', 'updated_at'
         )
         read_only_fields = ('id', 'agent', 'is_boosted', 'is_featured', 'created_at', 'updated_at')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if is_ios_client(self.context.get('request')):
+            data['is_boosted'] = False
+        return data
 
     def to_internal_value(self, data):
         if isinstance(data, dict):

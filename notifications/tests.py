@@ -208,4 +208,81 @@ class NotificationAPITests(APITestCase):
         )
         self.assertIsInstance(sent, int)
 
+    def test_boost_push_notifications_exclude_ios_and_hide_from_ios_feed(self):
+        from unittest.mock import patch, MagicMock
+        from datetime import timedelta
+        from django.utils import timezone
+        from notifications.models import DeviceToken, Notification
+        from agents.models import Listing, Category
+        from profiles.models import BoostPlan, ListingBoostPlacement
+        from agents.utils import expire_outdated_boosts
+
+        # Register both iOS and Android tokens for the agent
+        DeviceToken.objects.create(user=self.agent_user, token="ios_device_token_abc", platform="ios", is_active=True)
+        DeviceToken.objects.create(user=self.agent_user, token="android_device_token_xyz", platform="android", is_active=True)
+
+        cat = Category.objects.create(name="Flat")
+        listing = Listing.objects.create(
+            agent=self.agent_user,
+            title="Test Boosted Flat",
+            category=cat,
+            price=1000000,
+            address="Lagos",
+            latitude=6.5,
+            longitude=3.3,
+            is_published=True,
+            is_boosted=True,
+        )
+        bp = BoostPlan.objects.create(name="7 Days", duration_days=7, price=2500)
+        ListingBoostPlacement.objects.create(
+            listing=listing,
+            agent=self.agent_user,
+            boost_plan=bp,
+            amount=2500,
+            duration_days=7,
+            date_expires=timezone.now() - timedelta(hours=1),
+            status='active',
+        )
+
+        # Mock Firebase messaging so we can inspect the exact tokens and copy sent
+        mock_messaging = MagicMock()
+        mock_messaging.send_each_for_multicast.return_value = MagicMock(success_count=1, failure_count=0, responses=[])
+        mock_firebase_admin = MagicMock(messaging=mock_messaging)
+
+        with patch('core.firebase.get_firebase_app', return_value=MagicMock()):
+            with patch.dict('sys.modules', {'firebase_admin': mock_firebase_admin, 'firebase_admin.messaging': mock_messaging}):
+                expire_outdated_boosts()
+
+        # Verify MulticastMessage only targeted the Android token (never iOS)
+        self.assertTrue(mock_messaging.MulticastMessage.called)
+        call_kwargs = mock_messaging.MulticastMessage.call_args.kwargs
+        self.assertEqual(call_kwargs['tokens'], ["android_device_token_xyz"])
+        self.assertNotIn("ios_device_token_abc", call_kwargs['tokens'])
+
+        # Verify notification copy does NOT tell agents to renew or buy
+        notif_kwargs = mock_messaging.Notification.call_args.kwargs
+        combined = f"{notif_kwargs['title']} {notif_kwargs['body']}".lower()
+        self.assertIn("ended", combined)
+        self.assertNotIn("renew", combined)
+        self.assertNotIn("buy", combined)
+
+        # Verify in-app NotificationViewSet hides boost notifications on iOS
+        Notification.objects.create(
+            recipient=self.agent_user,
+            notification_type='system',
+            title='Boost Ended',
+            message="The boost for your listing 'Test Boosted Flat' has ended.",
+            listing=listing,
+        )
+        token = self.get_jwt_token("notifagent@example.com", "securepassword123")
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        ios_list = self.client.get(self.list_url, HTTP_X_CLIENT_PLATFORM='ios')
+        self.assertEqual(ios_list.status_code, status.HTTP_200_OK)
+        self.assertFalse(any('boost' in n['title'].lower() for n in ios_list.data['results']))
+
+        android_list = self.client.get(self.list_url, HTTP_X_CLIENT_PLATFORM='android')
+        self.assertEqual(android_list.status_code, status.HTTP_200_OK)
+        self.assertTrue(any('boost' in n['title'].lower() for n in android_list.data['results']))
+
 
