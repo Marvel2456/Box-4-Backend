@@ -37,15 +37,19 @@ def expire_outdated_boosts():
 
     now = timezone.now()
     with db_transaction.atomic():
-        expired_placements = ListingBoostPlacement.objects.select_for_update().filter(
-            status='active',
-            date_expires__lte=now
+        expired_rows = list(
+            ListingBoostPlacement.objects
+            .select_for_update(skip_locked=True)
+            .filter(status='active', date_expires__lte=now)
+            .values_list('id', 'listing_id')
         )
-        listing_ids = list(expired_placements.values_list('listing_id', flat=True).distinct())
-        if not listing_ids:
+        if not expired_rows:
             return 0
 
-        count = expired_placements.update(status='expired', updated_at=now)
+        placement_ids = [row[0] for row in expired_rows]
+        listing_ids = list(dict.fromkeys(row[1] for row in expired_rows))
+
+        count = ListingBoostPlacement.objects.filter(id__in=placement_ids).update(status='expired', updated_at=now)
 
         for listing_id in listing_ids:
             has_active = ListingBoostPlacement.objects.filter(

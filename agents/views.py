@@ -697,7 +697,7 @@ class ListingFeatureView(generics.GenericAPIView):
             if not plan:
                 return Response({"error": "No active subscription plan found. Please subscribe to feature listings."}, status=status.HTTP_403_FORBIDDEN)
 
-            current_featured_count = Listing.objects.select_for_update().filter(agent=locked_listing.agent, is_featured=True).count()
+            current_featured_count = Listing.objects.filter(agent=locked_listing.agent, is_featured=True).count()
             if plan.max_featured > 0 and current_featured_count >= plan.max_featured:
                 return Response({
                     "error": f"You have reached your plan limit of {plan.max_featured} featured listings on the '{plan.name}' plan. Please upgrade to feature more."
