@@ -581,7 +581,6 @@ class ListingBoostView(generics.GenericAPIView):
                 existing_placement = (
                     ListingBoostPlacement.objects
                     .select_for_update()
-                    .select_related('boost_plan')
                     .filter(listing=locked_listing, payment_reference=effective_ref)
                     .first()
                 )
@@ -661,7 +660,6 @@ class ListingFeatureView(generics.GenericAPIView):
             profile = (
                 AgentProfile.objects
                 .select_for_update()
-                .select_related('plan')
                 .filter(user=listing.agent)
                 .first()
             )

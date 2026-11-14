@@ -91,7 +91,6 @@ def fulfill_payment_transaction(transaction, paystack_data=None):
         locked_tx = (
             PaymentTransaction.objects
             .select_for_update()
-            .select_related('user', 'plan', 'boost_plan', 'listing')
             .get(pk=transaction.pk)
         )
 

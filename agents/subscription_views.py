@@ -201,7 +201,6 @@ class AgentSubscribeView(generics.GenericAPIView):
                 existing_sub = (
                     AgentSubscription.objects
                     .select_for_update()
-                    .select_related('plan')
                     .filter(agent=user, transaction_reference=effective_ref)
                     .first()
                 )
